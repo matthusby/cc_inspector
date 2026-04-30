@@ -1,0 +1,188 @@
+defmodule CcInspectorWeb.SessionLiveTest do
+  use CcInspectorWeb.ConnCase, async: false
+
+  import CcInspector.SessionFixtures
+
+  setup do
+    {:ok, dir: sandbox_claude_dir!()}
+  end
+
+  test "redirects with a flash error when the session id is unknown", %{conn: conn} do
+    assert {:error, {:live_redirect, %{to: "/", flash: %{"error" => msg}}}} =
+             live(conn, ~p"/sessions/does-not-exist")
+
+    assert msg =~ "not found"
+  end
+
+  test "renders the session header with project, cwd, branch, and model", %{conn: conn, dir: dir} do
+    write_session!(dir, "-Users-me-myproj", "sess-1", [
+      user_row(
+        content: "first prompt",
+        cwd: "/Users/me/myproj",
+        git_branch: "main"
+      ),
+      assistant_row(
+        message_id: "m1",
+        model: "claude-opus-4-7",
+        content: [text_block("hi")]
+      )
+    ])
+
+    {:ok, _view, html} = live(conn, ~p"/sessions/sess-1")
+
+    assert html =~ "myproj"
+    assert html =~ "/Users/me/myproj"
+    assert html =~ "main"
+    assert html =~ "claude-opus-4-7"
+    assert html =~ "sess-1"
+  end
+
+  test "shows ai_title as a subtitle in the header when present", %{conn: conn, dir: dir} do
+    write_session!(dir, "-Users-me-proj", "sess-titled", [
+      user_row(content: "go", cwd: "/Users/me/proj"),
+      assistant_row(message_id: "m1", content: [text_block("ok")]),
+      ai_title_row("sess-titled", "Refactor the auth flow")
+    ])
+
+    {:ok, _view, html} = live(conn, ~p"/sessions/sess-titled")
+
+    assert html =~ "Refactor the auth flow"
+  end
+
+  test "renders a turn with text, thinking, and a paired tool_use+result", %{
+    conn: conn,
+    dir: dir
+  } do
+    write_session!(dir, "-Users-me-proj", "sess-blocks", [
+      user_row(content: "do the thing", cwd: "/Users/me/proj"),
+      assistant_row(
+        message_id: "m1",
+        content: [
+          thinking_block("hmm let me think"),
+          text_block("I'll run a command."),
+          tool_use_block("Bash", %{"command" => "echo hello"}, id: "tool_1")
+        ]
+      ),
+      user_row(content: [tool_result_block("tool_1", "hello\n")]),
+      assistant_row(
+        message_id: "m2",
+        content: [text_block("All done.")]
+      )
+    ])
+
+    {:ok, _view, html} = live(conn, ~p"/sessions/sess-blocks")
+
+    assert html =~ "do the thing"
+    assert html =~ "I&#39;ll run a command."
+    assert html =~ "All done."
+    assert html =~ "hmm let me think"
+    assert html =~ "Bash"
+    # tool_use input pretty-printed somewhere on the page
+    assert html =~ "echo hello"
+    # tool_result content visible
+    assert html =~ "hello"
+  end
+
+  test "renders a slash command turn with the command name", %{conn: conn, dir: dir} do
+    write_session!(dir, "-Users-me-proj", "sess-slash", [
+      user_row(
+        content: "<command-name>compact</command-name>\n<args>foo</args>",
+        cwd: "/Users/me/proj"
+      ),
+      assistant_row(message_id: "m1", content: [text_block("done")])
+    ])
+
+    {:ok, _view, html} = live(conn, ~p"/sessions/sess-slash")
+
+    assert html =~ "compact"
+    assert html =~ "done"
+  end
+
+  test "renders encrypted thinking pill (no expander) when thinking text is empty", %{
+    conn: conn,
+    dir: dir
+  } do
+    write_session!(dir, "-Users-me-proj", "sess-redacted", [
+      user_row(content: "go", cwd: "/Users/me/proj"),
+      assistant_row(
+        message_id: "m1",
+        content: [
+          thinking_block(""),
+          text_block("here's the answer")
+        ]
+      )
+    ])
+
+    {:ok, _view, html} = live(conn, ~p"/sessions/sess-redacted")
+
+    assert html =~ "thinking · encrypted"
+    assert html =~ "here&#39;s the answer"
+
+    # No <details> tag for the empty thinking block — only thinking-related
+    # markup should be the pill.
+    refute html =~ ~r{<details[^>]*>\s*<summary[^>]*>\s*<!--[^-]*-->\s*<span[^>]*hero-light-bulb}
+  end
+
+  test "renders thinking expander when thinking text is present", %{conn: conn, dir: dir} do
+    write_session!(dir, "-Users-me-proj", "sess-thinking", [
+      user_row(content: "go", cwd: "/Users/me/proj"),
+      assistant_row(
+        message_id: "m1",
+        content: [
+          thinking_block("the user wants X, so I should Y"),
+          text_block("done")
+        ]
+      )
+    ])
+
+    {:ok, _view, html} = live(conn, ~p"/sessions/sess-thinking")
+
+    assert html =~ "the user wants X, so I should Y"
+    refute html =~ "thinking · encrypted"
+  end
+
+  test "marks an errored tool result as an error", %{conn: conn, dir: dir} do
+    write_session!(dir, "-Users-me-proj", "sess-err", [
+      user_row(content: "go", cwd: "/Users/me/proj"),
+      assistant_row(
+        message_id: "m1",
+        content: [tool_use_block("Bash", %{"command" => "false"}, id: "tool_e")]
+      ),
+      user_row(content: [tool_result_block("tool_e", "boom", is_error: true)])
+    ])
+
+    {:ok, view, _html} = live(conn, ~p"/sessions/sess-err")
+    html = render(view)
+
+    assert html =~ "error"
+    assert html =~ "boom"
+  end
+
+  test "PubSub update on the session topic re-fetches turns", %{conn: conn, dir: dir} do
+    path =
+      write_session!(dir, "-Users-me-proj", "sess-live", [
+        user_row(content: "first", cwd: "/Users/me/proj"),
+        assistant_row(message_id: "m1", content: [text_block("hi")])
+      ])
+
+    {:ok, view, html} = live(conn, ~p"/sessions/sess-live")
+    refute html =~ "second prompt"
+
+    append_session!(path, [
+      user_row(content: "second prompt"),
+      assistant_row(message_id: "m2", content: [text_block("there")])
+    ])
+
+    # Mtime resolution can be coarse — bump it explicitly so the cache invalidates.
+    File.touch!(path, {{2030, 1, 1}, {0, 0, 0}})
+
+    Phoenix.PubSub.broadcast(
+      CcInspector.PubSub,
+      "session:sess-live",
+      {:session_updated, "sess-live"}
+    )
+
+    html = render(view)
+    assert html =~ "second prompt"
+  end
+end
