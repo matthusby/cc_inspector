@@ -3,6 +3,8 @@ defmodule CcInspectorWeb.Format do
   Formatting helpers for displaying session data.
   """
 
+  @seven_days_seconds 7 * 86_400
+
   def relative_time(nil), do: "—"
 
   def relative_time(%DateTime{} = ts) do
@@ -13,7 +15,7 @@ defmodule CcInspectorWeb.Format do
       diff < 60 -> "#{diff}s ago"
       diff < 3600 -> "#{div(diff, 60)}m ago"
       diff < 86_400 -> "#{div(diff, 3600)}h ago"
-      diff < 7 * 86_400 -> "#{div(diff, 86_400)}d ago"
+      diff < @seven_days_seconds -> "#{div(diff, 86_400)}d ago"
       true -> Calendar.strftime(ts, "%Y-%m-%d")
     end
   end

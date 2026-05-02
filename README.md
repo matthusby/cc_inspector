@@ -2,52 +2,41 @@
 
 A local Phoenix LiveView app for browsing your [Claude Code](https://claude.com/claude-code) session history.
 
-It reads the JSONL transcript files Claude Code already writes to `~/.claude/projects/` and renders them as a navigable, live-updating UI. There's no database, no hooks to install, and nothing to configure — point it at your machine and start it.
+It reads the JSONL transcripts Claude Code already writes to `~/.claude/projects/` and renders them as a navigable, live-updating UI. There's no database, no hooks to install, and nothing to configure — point it at your machine and start it.
 
-## What it shows
+![CC Inspector sessions index](docs/sessions.png)
 
-- **Sessions index (`/`)** — every session on disk, grouped by project, sorted by most recent activity. Each row shows the AI-generated title (when present), first user prompt, branch, duration, turn count, and token usage (input / cached / output).
-- **Session detail (`/sessions/:id`)** — the full conversation rendered turn-by-turn: user prompts, assistant text, thinking blocks (with an "encrypted" pill for redacted thinking from newer models), and paired tool calls + results with pretty-printed input and output.
-- **Live updates** — a file-system watcher invalidates a small ETS cache and broadcasts over Phoenix PubSub when transcripts change, so open pages re-render as Claude works.
+## What you get
+
+- **Token usage at a glance** — input / cached / output totals across the last 7 days, summed across every session.
+- **Sessions index** — every session on disk, grouped by project, sorted by most recent activity. Each row shows the AI-generated title (when present), first user prompt, branch, duration, turn count, and per-session token usage.
+- **Session detail** — the full conversation rendered turn-by-turn: user prompts, assistant text, thinking blocks (with an "encrypted" pill for redacted thinking from newer models), and paired tool calls + results with pretty-printed input and output. Long assistant blocks collapse so you can scan a session quickly.
+- **Filter** — type to narrow the list by project path, prompt text, branch, or session id.
+- **Live updates** — a filesystem watcher picks up new turns as Claude writes them, so an open page re-renders while a session is in flight.
 
 ## Quick start
 
+You'll need Elixir 1.15+ and Erlang/OTP installed.
+
 ```bash
+git clone https://github.com/matthusby/cc_inspector.git
+cd cc_inspector
 mix setup
 mix phx.server
 ```
 
 Then open <http://localhost:4444>.
 
-By default the app reads `~/.claude/projects`. Override it in config if Claude Code writes elsewhere:
+## Configuration
+
+By default the app reads `~/.claude/projects`. If your transcripts live elsewhere, override the path in config:
 
 ```elixir
 # config/dev.exs
 config :cc_inspector, claude_projects_dir: "/path/to/projects"
 ```
 
-## How it works
-
-```
-~/.claude/projects/<slug>/<session-id>.jsonl
-                │
-                │  FileSystem watcher
-                ▼
-        Sessions.Cache (ETS, mtime/size invalidated)
-                │
-                │  Parser → Summary / Turns
-                ▼
-        Phoenix PubSub (sessions, session:<id>)
-                │
-                ▼
-            LiveView
-```
-
-- **Parser** (`lib/cc_inspector/sessions/parser.ex`) — streams a JSONL file into typed `Event` structs, classifying each record (`user`, `assistant`, `system`, `ai-title`, `attachment`, `permission-mode`, `file-history-snapshot`, etc.).
-- **Summary** (`lib/cc_inspector/sessions/summary.ex`) — folds events into the row shown on the index: timestamps, turn counts, deduped token usage, first prompt, AI title.
-- **Turns** (`lib/cc_inspector/sessions/turns.ex`) — pairs `tool_use` blocks with their matching `tool_result` so the detail view can render them together.
-- **Cache** (`lib/cc_inspector/sessions/cache.ex`) — ETS-backed; entries are invalidated by mtime + size, so re-reads only happen when a file actually changes.
-- **Watcher** (`lib/cc_inspector/sessions/watcher.ex`) — listens for filesystem events under the projects dir and broadcasts `:session_created` / `:session_updated` / `:session_removed`. Sub-agent transcripts (under `<id>/subagents/`) are intentionally not surfaced as top-level sessions.
+The app only ever reads from this directory — it never writes to your Claude Code data.
 
 ## Development
 
@@ -58,4 +47,4 @@ mix test        # run the test suite
 mix precommit   # compile --warnings-as-errors, deps.unlock --unused, format, test
 ```
 
-The test suite uses a sandboxed projects directory (see `test/support/fixtures.ex`) and writes synthetic JSONL transcripts, so it doesn't touch your real `~/.claude` directory.
+The test suite uses a sandboxed projects directory and writes synthetic JSONL transcripts, so it doesn't touch your real `~/.claude` directory.

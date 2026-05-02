@@ -4,6 +4,7 @@ defmodule CcInspectorWeb.SessionsLive do
   alias CcInspector.Sessions
 
   @sessions_per_project 10
+  @seven_days_seconds 7 * 86_400
 
   @impl true
   def mount(_params, _session, socket) do
@@ -39,7 +40,8 @@ defmodule CcInspectorWeb.SessionsLive do
   end
 
   defp assign_summaries(socket) do
-    assign(socket, :summaries, Sessions.list_summaries())
+    summaries = Sessions.list_summaries()
+    assign(socket, summaries: summaries, totals_7d: seven_day_totals(summaries))
   end
 
   defp visible_summaries(summaries, ""), do: summaries
@@ -52,6 +54,23 @@ defmodule CcInspectorWeb.SessionsLive do
       |> Enum.any?(fn val ->
         is_binary(val) and String.contains?(String.downcase(val), needle)
       end)
+    end)
+  end
+
+  defp seven_day_totals(summaries) do
+    cutoff = DateTime.add(DateTime.utc_now(), -@seven_days_seconds, :second)
+
+    summaries
+    |> Enum.filter(fn s ->
+      s.last_activity_at && DateTime.compare(s.last_activity_at, cutoff) != :lt
+    end)
+    |> Enum.reduce(%{input: 0, cache_read: 0, cache_creation: 0, output: 0}, fn s, acc ->
+      %{
+        input: acc.input + (s.tokens.input || 0),
+        cache_read: acc.cache_read + (s.tokens.cache_read || 0),
+        cache_creation: acc.cache_creation + (s.tokens.cache_creation || 0),
+        output: acc.output + (s.tokens.output || 0)
+      }
     end)
   end
 
@@ -74,11 +93,22 @@ defmodule CcInspectorWeb.SessionsLive do
 
   @impl true
   def render(assigns) do
-    assigns = assign(assigns, :groups, grouped_summaries(assigns.summaries, assigns.filter))
+    assigns =
+      assign(assigns, :groups, grouped_summaries(assigns.summaries, assigns.filter))
 
     ~H"""
     <Layouts.app flash={@flash}>
       <div class="space-y-6">
+        <div class="grid grid-cols-3 gap-3">
+          <.token_card label="Input" value={@totals_7d.input} />
+          <.token_card
+            label="Cached"
+            value={@totals_7d.cache_read}
+            hint={"cache_creation: #{number(@totals_7d.cache_creation)}"}
+          />
+          <.token_card label="Output" value={@totals_7d.output} />
+        </div>
+
         <div class="flex items-end justify-between gap-4">
           <div>
             <h1 class="text-2xl font-semibold text-base-content tracking-tight">Sessions</h1>
@@ -121,6 +151,25 @@ defmodule CcInspectorWeb.SessionsLive do
         />
       </div>
     </Layouts.app>
+    """
+  end
+
+  attr :label, :string, required: true
+  attr :value, :integer, required: true
+  attr :hint, :string, default: nil
+
+  defp token_card(assigns) do
+    ~H"""
+    <div
+      class="rounded-lg border border-base-300 bg-base-100 px-4 py-3"
+      title={@hint}
+    >
+      <div class="text-xs uppercase tracking-wide text-base-content/50">{@label}</div>
+      <div class="mt-1 text-xl font-semibold tabular-nums text-base-content">
+        {number(@value)}
+      </div>
+      <div class="text-xs text-base-content/40 mt-0.5">tokens · last 7 days</div>
+    </div>
     """
   end
 
