@@ -3,6 +3,8 @@ defmodule CcInspectorWeb.SessionsLive do
 
   alias CcInspector.Sessions
 
+  @sessions_per_project 10
+
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket), do: Sessions.subscribe()
@@ -10,12 +12,24 @@ defmodule CcInspectorWeb.SessionsLive do
     {:ok,
      socket
      |> assign(:filter, "")
+     |> assign(:expanded_projects, MapSet.new())
      |> assign_summaries()}
   end
 
   @impl true
   def handle_event("filter", %{"q" => q}, socket) do
     {:noreply, assign(socket, :filter, q)}
+  end
+
+  def handle_event("toggle_project", %{"cwd" => cwd}, socket) do
+    expanded =
+      if MapSet.member?(socket.assigns.expanded_projects, cwd) do
+        MapSet.delete(socket.assigns.expanded_projects, cwd)
+      else
+        MapSet.put(socket.assigns.expanded_projects, cwd)
+      end
+
+    {:noreply, assign(socket, :expanded_projects, expanded)}
   end
 
   @impl true
@@ -100,15 +114,32 @@ defmodule CcInspectorWeb.SessionsLive do
           <% end %>
         </div>
 
-        <.project_card :for={group <- @groups} group={group} />
+        <.project_card
+          :for={group <- @groups}
+          group={group}
+          expanded={MapSet.member?(@expanded_projects, group.cwd)}
+        />
       </div>
     </Layouts.app>
     """
   end
 
   attr :group, :map, required: true
+  attr :expanded, :boolean, default: false
 
   defp project_card(assigns) do
+    total = length(assigns.group.sessions)
+
+    visible =
+      if assigns.expanded,
+        do: assigns.group.sessions,
+        else: Enum.take(assigns.group.sessions, @sessions_per_project)
+
+    assigns =
+      assigns
+      |> assign(:visible_sessions, visible)
+      |> assign(:hidden_count, total - length(visible))
+
     ~H"""
     <section class="rounded-lg border border-base-300 bg-base-100 overflow-hidden">
       <header class="px-5 py-3 border-b border-base-300 flex items-baseline justify-between gap-4">
@@ -142,7 +173,7 @@ defmodule CcInspectorWeb.SessionsLive do
           </tr>
         </thead>
         <tbody class="divide-y divide-base-200">
-          <tr :for={s <- @group.sessions} class="hover:bg-base-200/40 transition-colors">
+          <tr :for={s <- @visible_sessions} class="hover:bg-base-200/40 transition-colors">
             <td class="px-4 py-2.5 max-w-0 w-full">
               <.link navigate={~p"/sessions/#{s.session_id}"} class="block group min-w-0">
                 <div class="text-base-content/90 line-clamp-1 group-hover:text-primary">
@@ -182,6 +213,22 @@ defmodule CcInspectorWeb.SessionsLive do
             </td>
             <td class="px-3 py-2.5 text-right text-xs text-base-content/70 tabular-nums align-top">
               {number(s.tokens.output)}
+            </td>
+          </tr>
+          <tr :if={@hidden_count > 0 or @expanded}>
+            <td colspan="7" class="px-4 py-2 text-center bg-base-200/20">
+              <button
+                type="button"
+                phx-click="toggle_project"
+                phx-value-cwd={@group.cwd}
+                class="text-xs text-base-content/60 hover:text-primary transition-colors"
+              >
+                <%= if @expanded do %>
+                  Show less
+                <% else %>
+                  Show {@hidden_count} more session{if @hidden_count == 1, do: "", else: "s"}
+                <% end %>
+              </button>
             </td>
           </tr>
         </tbody>

@@ -114,6 +114,8 @@ defmodule CcInspectorWeb.SessionLive do
   attr :turn, :map, required: true
 
   defp turn_card(assigns) do
+    assigns = assign(assigns, :blocks_summary, blocks_summary(assigns.turn.blocks))
+
     ~H"""
     <article class="space-y-3">
       <header class="flex items-baseline gap-3">
@@ -129,12 +131,41 @@ defmodule CcInspectorWeb.SessionLive do
 
       <.user_message turn={@turn} />
 
-      <div :for={block <- @turn.blocks} class="ml-4 pl-4 border-l-2 border-base-200">
-        <.block block={block} />
-      </div>
+      <details :if={@turn.blocks != []} class="group ml-4">
+        <summary class="cursor-pointer hover:bg-base-200/40 rounded px-3 py-2 text-xs text-base-content/60 flex items-center gap-2 select-none">
+          <.icon
+            name="hero-chevron-right"
+            class="h-3 w-3 transition-transform group-open:rotate-90"
+          />
+          {@blocks_summary}
+        </summary>
+        <div class="mt-3 pl-4 border-l-2 border-base-200 space-y-3">
+          <.block :for={block <- @turn.blocks} block={block} />
+        </div>
+      </details>
     </article>
     """
   end
+
+  defp blocks_summary(blocks) do
+    counts = Enum.frequencies_by(blocks, & &1.kind)
+
+    [
+      pluralize(counts[:tool_use], "tool", "tools"),
+      pluralize(counts[:text], "message", "messages"),
+      pluralize(counts[:thinking], "thinking block", "thinking blocks")
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> "no assistant response"
+      parts -> Enum.join(parts, " · ")
+    end
+  end
+
+  defp pluralize(nil, _, _), do: nil
+  defp pluralize(0, _, _), do: nil
+  defp pluralize(1, singular, _), do: "1 " <> singular
+  defp pluralize(n, _, plural), do: "#{n} #{plural}"
 
   attr :turn, :map, required: true
 

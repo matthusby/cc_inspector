@@ -158,6 +158,26 @@ defmodule CcInspectorWeb.SessionLiveTest do
     assert html =~ "boom"
   end
 
+  test "shows a collapsed summary of the assistant blocks per turn", %{conn: conn, dir: dir} do
+    write_session!(dir, "-Users-me-proj", "sess-counts", [
+      user_row(content: "do stuff", cwd: "/Users/me/proj"),
+      assistant_row(
+        message_id: "m1",
+        content: [
+          thinking_block("hmm"),
+          text_block("first"),
+          tool_use_block("Bash", %{"command" => "ls"}, id: "t1"),
+          tool_use_block("Read", %{"file_path" => "/x"}, id: "t2"),
+          text_block("second")
+        ]
+      )
+    ])
+
+    {:ok, _view, html} = live(conn, ~p"/sessions/sess-counts")
+
+    assert html =~ "2 tools · 2 messages · 1 thinking block"
+  end
+
   test "PubSub update on the session topic re-fetches turns", %{conn: conn, dir: dir} do
     path =
       write_session!(dir, "-Users-me-proj", "sess-live", [

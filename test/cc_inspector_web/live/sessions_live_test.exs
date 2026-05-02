@@ -113,6 +113,29 @@ defmodule CcInspectorWeb.SessionsLiveTest do
     assert html =~ "explain this"
   end
 
+  test "caps each project at 10 sessions and reveals the rest via the expander", %{
+    conn: conn,
+    dir: dir
+  } do
+    for i <- 1..12 do
+      write_session!(dir, "-Users-me-proj-bigly", "sess-#{i}", [
+        user_row(content: "prompt #{i}", cwd: "/Users/me/proj/bigly")
+      ])
+    end
+
+    {:ok, view, html} = live(conn, ~p"/")
+
+    assert html =~ "Show 2 more sessions"
+
+    html =
+      view
+      |> element(~s|button[phx-value-cwd="/Users/me/proj/bigly"]|)
+      |> render_click()
+
+    refute html =~ "Show 2 more sessions"
+    assert html =~ "Show less"
+  end
+
   test "links route to the session detail page", %{conn: conn, dir: dir} do
     write_session!(dir, "-Users-me-proj-alpha", "sess-alpha", [
       user_row(content: "alpha prompt", cwd: "/Users/me/proj/alpha")

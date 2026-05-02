@@ -167,7 +167,9 @@ defmodule CcInspector.Sessions.SummaryTest do
 
     test "skips slash-command first prompts when picking first_prompt_preview" do
       events = [
-        event(:user, content: "<command-name>/clear</command-name>\n<command-args></command-args>"),
+        event(:user,
+          content: "<command-name>/clear</command-name>\n<command-args></command-args>"
+        ),
         event(:user, content: "the actual question"),
         event(:assistant, content: [%{"type" => "text", "text" => "ok"}])
       ]
