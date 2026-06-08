@@ -5,6 +5,9 @@ defmodule CcInspectorWeb.SessionsLive do
 
   @sessions_per_project 10
   @seven_days_seconds 7 * 86_400
+  # Fallback for sessions with no timestamped entries (nil last_activity_at),
+  # so DateTime sorts don't crash. See Sessions.list_summaries/0.
+  @epoch ~U[1970-01-01 00:00:00Z]
 
   @impl true
   def mount(_params, _session, socket) do
@@ -79,7 +82,7 @@ defmodule CcInspectorWeb.SessionsLive do
     |> visible_summaries(filter)
     |> Enum.group_by(& &1.project_cwd)
     |> Enum.map(fn {cwd, sessions} ->
-      sorted = Enum.sort_by(sessions, & &1.last_activity_at, {:desc, DateTime})
+      sorted = Enum.sort_by(sessions, &(&1.last_activity_at || @epoch), {:desc, DateTime})
 
       %{
         cwd: cwd,
@@ -88,7 +91,7 @@ defmodule CcInspectorWeb.SessionsLive do
         total_turns: Enum.reduce(sorted, 0, &(&2 + (&1.turn_count || 0)))
       }
     end)
-    |> Enum.sort_by(& &1.last_activity_at, {:desc, DateTime})
+    |> Enum.sort_by(&(&1.last_activity_at || @epoch), {:desc, DateTime})
   end
 
   @impl true

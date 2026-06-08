@@ -9,9 +9,14 @@ defmodule CcInspector.Sessions do
 
   alias CcInspector.Sessions.Cache
 
+  # Sessions whose JSONL has no timestamped entries have a nil
+  # last_activity_at, which DateTime.compare/2 can't sort. Treat them as the
+  # epoch so they sort to the bottom instead of crashing.
+  @epoch ~U[1970-01-01 00:00:00Z]
+
   def list_summaries do
     Cache.list_summaries(claude_dir())
-    |> Enum.sort_by(& &1.last_activity_at, {:desc, DateTime})
+    |> Enum.sort_by(&(&1.last_activity_at || @epoch), {:desc, DateTime})
   end
 
   def get_summary(session_id), do: Cache.summary(session_id, claude_dir())
