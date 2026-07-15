@@ -14,6 +14,7 @@ defmodule CcInspectorWeb.Router do
     pipe_through :browser
 
     live "/", SessionsLive, :index
+    live "/sessions/:provider/:id", SessionLive, :show
     live "/sessions/:id", SessionLive, :show
   end
 

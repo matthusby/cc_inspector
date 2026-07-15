@@ -16,13 +16,18 @@ defmodule CcInspectorWeb.SessionsLive do
     {:ok,
      socket
      |> assign(:filter, "")
+     |> assign(:provider_filter, "all")
      |> assign(:expanded_projects, MapSet.new())
      |> assign_summaries()}
   end
 
   @impl true
   def handle_event("filter", %{"q" => q}, socket) do
-    {:noreply, assign(socket, :filter, q)}
+    {:noreply, socket |> assign(:filter, q) |> refresh_groups()}
+  end
+
+  def handle_event("filter_provider", %{"provider" => provider}, socket) do
+    {:noreply, socket |> assign(:provider_filter, provider) |> refresh_groups()}
   end
 
   def handle_event("toggle_project", %{"cwd" => cwd}, socket) do
@@ -33,30 +38,41 @@ defmodule CcInspectorWeb.SessionsLive do
         MapSet.put(socket.assigns.expanded_projects, cwd)
       end
 
-    {:noreply, assign(socket, :expanded_projects, expanded)}
+    {:noreply, socket |> assign(:expanded_projects, expanded) |> refresh_groups()}
   end
 
   @impl true
-  def handle_info({event, _id}, socket)
-      when event in [:session_created, :session_updated, :session_removed] do
+  def handle_info({:session_changed, _provider, _id, _action}, socket) do
+    {:noreply, assign_summaries(socket)}
+  end
+
+  def handle_info({:provider_changed, _provider}, socket) do
     {:noreply, assign_summaries(socket)}
   end
 
   defp assign_summaries(socket) do
     summaries = Sessions.list_summaries()
-    assign(socket, summaries: summaries, totals_7d: seven_day_totals(summaries))
+
+    socket
+    |> assign(:summaries, summaries)
+    |> refresh_groups()
   end
 
-  defp visible_summaries(summaries, ""), do: summaries
-
-  defp visible_summaries(summaries, q) do
+  defp visible_summaries(summaries, q, provider_filter) do
     needle = String.downcase(q)
 
     Enum.filter(summaries, fn s ->
-      [s.project_cwd, s.session_id, s.first_prompt_preview, s.git_branch]
-      |> Enum.any?(fn val ->
-        is_binary(val) and String.contains?(String.downcase(val), needle)
-      end)
+      provider_matches? =
+        provider_filter == "all" or Atom.to_string(s.provider) == provider_filter
+
+      text_matches? =
+        q == "" or
+          [s.project_cwd, s.session_id, s.first_prompt_preview, s.git_branch, s.ai_title]
+          |> Enum.any?(fn val ->
+            is_binary(val) and String.contains?(String.downcase(val), needle)
+          end)
+
+      provider_matches? and text_matches?
     end)
   end
 
@@ -67,24 +83,29 @@ defmodule CcInspectorWeb.SessionsLive do
     |> Enum.filter(fn s ->
       s.last_activity_at && DateTime.compare(s.last_activity_at, cutoff) != :lt
     end)
-    |> Enum.reduce(%{input: 0, cache_read: 0, cache_creation: 0, output: 0}, fn s, acc ->
-      %{
-        input: acc.input + (s.tokens.input || 0),
-        cache_read: acc.cache_read + (s.tokens.cache_read || 0),
-        cache_creation: acc.cache_creation + (s.tokens.cache_creation || 0),
-        output: acc.output + (s.tokens.output || 0)
-      }
-    end)
+    |> Enum.reduce(
+      %{input: 0, cache_read: 0, cache_creation: 0, output: 0, reasoning: 0},
+      fn s, acc ->
+        %{
+          input: acc.input + (s.tokens.input || 0),
+          cache_read: acc.cache_read + (s.tokens.cache_read || 0),
+          cache_creation: acc.cache_creation + (s.tokens.cache_creation || 0),
+          output: acc.output + (s.tokens.output || 0),
+          reasoning: acc.reasoning + Map.get(s.tokens, :reasoning, 0)
+        }
+      end
+    )
   end
 
-  defp grouped_summaries(summaries, filter) do
+  defp grouped_summaries(summaries, filter, provider_filter) do
     summaries
-    |> visible_summaries(filter)
+    |> visible_summaries(filter, provider_filter)
     |> Enum.group_by(& &1.project_cwd)
     |> Enum.map(fn {cwd, sessions} ->
       sorted = Enum.sort_by(sessions, &(&1.last_activity_at || @epoch), {:desc, DateTime})
 
       %{
+        id: :erlang.phash2(cwd),
         cwd: cwd,
         sessions: sorted,
         last_activity_at: hd(sorted).last_activity_at,
@@ -94,15 +115,36 @@ defmodule CcInspectorWeb.SessionsLive do
     |> Enum.sort_by(&(&1.last_activity_at || @epoch), {:desc, DateTime})
   end
 
+  defp refresh_groups(socket) do
+    visible =
+      visible_summaries(
+        socket.assigns.summaries,
+        socket.assigns.filter,
+        socket.assigns.provider_filter
+      )
+
+    provider_summaries =
+      visible_summaries(socket.assigns.summaries, "", socket.assigns.provider_filter)
+
+    groups = grouped_summaries(visible, "", "all")
+
+    socket
+    |> assign(:groups_empty?, groups == [])
+    |> assign(:group_count, length(groups))
+    |> assign(:visible_count, length(visible))
+    |> assign(:totals_7d, seven_day_totals(provider_summaries))
+    |> stream(:groups, groups,
+      reset: true,
+      dom_id: fn group -> "project-group-#{group.id}" end
+    )
+  end
+
   @impl true
   def render(assigns) do
-    assigns =
-      assign(assigns, :groups, grouped_summaries(assigns.summaries, assigns.filter))
-
     ~H"""
     <Layouts.app flash={@flash}>
       <div class="space-y-6">
-        <div class="grid grid-cols-3 gap-3">
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <.token_card label="Input" value={@totals_7d.input} />
           <.token_card
             label="Cached"
@@ -110,22 +152,22 @@ defmodule CcInspectorWeb.SessionsLive do
             hint={"cache_creation: #{number(@totals_7d.cache_creation)}"}
           />
           <.token_card label="Output" value={@totals_7d.output} />
+          <.token_card label="Reasoning" value={@totals_7d.reasoning} />
         </div>
 
         <div class="flex items-end justify-between gap-4">
           <div>
             <h1 class="text-2xl font-semibold text-base-content tracking-tight">Sessions</h1>
             <p class="text-sm text-base-content/60 mt-1">
-              {length(@summaries)} session{if length(@summaries) == 1, do: "", else: "s"} across {length(
-                @groups
-              )} project{if length(@groups) == 1, do: "", else: "s"} from
-              <code class="text-xs px-1.5 py-0.5 rounded bg-base-200">
-                {Sessions.claude_dir()}
-              </code>
+              {@visible_count} session{plural_suffix(@visible_count)} across {@group_count} project{plural_suffix(
+                @group_count
+              )} from
+              local Claude Code, Codex, and OpenCode data
             </p>
           </div>
-          <form phx-change="filter" class="w-64">
+          <form id="session-filter-form" phx-change="filter" class="w-64">
             <input
+              id="session-filter-input"
               type="text"
               name="q"
               value={@filter}
@@ -137,21 +179,56 @@ defmodule CcInspectorWeb.SessionsLive do
         </div>
 
         <div
-          :if={@groups == []}
-          class="rounded-lg border border-base-300 bg-base-100 p-12 text-center text-base-content/40"
+          id="provider-filters"
+          class="flex flex-wrap gap-2"
+          role="group"
+          aria-label="Provider filter"
         >
-          <%= if @summaries == [] do %>
-            No Claude Code sessions found yet. Start a session and it'll appear here.
-          <% else %>
-            No sessions match "{@filter}".
-          <% end %>
+          <button
+            :for={
+              {value, label} <- [
+                {"all", "All"},
+                {"claude", "Claude Code"},
+                {"codex", "Codex"},
+                {"opencode", "OpenCode"}
+              ]
+            }
+            id={"provider-filter-#{value}"}
+            type="button"
+            phx-click="filter_provider"
+            phx-value-provider={value}
+            class={[
+              "rounded-full border px-3 py-1.5 text-xs font-medium transition-all duration-150",
+              if(@provider_filter == value,
+                do: "border-primary bg-primary text-primary-content shadow-sm",
+                else:
+                  "border-base-300 bg-base-100 text-base-content/60 hover:border-primary/50 hover:text-base-content"
+              )
+            ]}
+          >
+            {label}
+          </button>
         </div>
 
-        <.project_card
-          :for={group <- @groups}
-          group={group}
-          expanded={MapSet.member?(@expanded_projects, group.cwd)}
-        />
+        <div id="session-groups" phx-update="stream" class="space-y-6">
+          <div
+            :if={@groups_empty?}
+            id="sessions-empty-state"
+            class="rounded-lg border border-base-300 bg-base-100 p-12 text-center text-base-content/40"
+          >
+            <%= if @summaries == [] do %>
+              No local coding-agent sessions found yet.
+            <% else %>
+              No sessions match "{@filter}" with the current provider filter.
+            <% end %>
+          </div>
+          <div :for={{id, group} <- @streams.groups} id={id}>
+            <.project_card
+              group={group}
+              expanded={MapSet.member?(@expanded_projects, group.cwd)}
+            />
+          </div>
+        </div>
       </div>
     </Layouts.app>
     """
@@ -227,7 +304,10 @@ defmodule CcInspectorWeb.SessionsLive do
         <tbody class="divide-y divide-base-200">
           <tr :for={s <- @visible_sessions} class="hover:bg-base-200/40 transition-colors">
             <td class="px-4 py-2.5 max-w-0 w-full">
-              <.link navigate={~p"/sessions/#{s.session_id}"} class="block group min-w-0">
+              <.link
+                navigate={~p"/sessions/#{Sessions.provider_slug(s.provider)}/#{s.session_id}"}
+                class="block group min-w-0"
+              >
                 <div class="text-base-content/90 line-clamp-1 group-hover:text-primary">
                   {s.ai_title || s.first_prompt_preview || "(no prompt)"}
                 </div>
@@ -237,8 +317,9 @@ defmodule CcInspectorWeb.SessionsLive do
                 >
                   {s.first_prompt_preview}
                 </div>
-                <div class="text-xs text-base-content/40 font-mono mt-0.5">
-                  {s.git_branch || "—"}
+                <div class="text-xs text-base-content/40 font-mono mt-1 flex items-center gap-2">
+                  <.provider_badge provider={s.provider} />
+                  <span>{s.git_branch || s.model || "—"}</span>
                 </div>
               </.link>
             </td>
@@ -270,6 +351,7 @@ defmodule CcInspectorWeb.SessionsLive do
           <tr :if={@hidden_count > 0 or @expanded}>
             <td colspan="7" class="px-4 py-2 text-center bg-base-200/20">
               <button
+                id={"toggle-project-#{@group.id}"}
                 type="button"
                 phx-click="toggle_project"
                 phx-value-cwd={@group.cwd}
@@ -288,4 +370,22 @@ defmodule CcInspectorWeb.SessionsLive do
     </section>
     """
   end
+
+  attr :provider, :atom, required: true
+
+  defp provider_badge(assigns) do
+    ~H"""
+    <span class={[
+      "inline-flex rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+      @provider == :claude && "bg-orange-500/10 text-orange-700 dark:text-orange-300",
+      @provider == :codex && "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+      @provider == :opencode && "bg-sky-500/10 text-sky-700 dark:text-sky-300"
+    ]}>
+      {Sessions.provider_label(@provider)}
+    </span>
+    """
+  end
+
+  defp plural_suffix(1), do: ""
+  defp plural_suffix(_), do: "s"
 end

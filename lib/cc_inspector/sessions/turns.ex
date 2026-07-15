@@ -20,6 +20,7 @@ defmodule CcInspector.Sessions.Turns do
       :user_kind,
       :blocks,
       :tokens,
+      :cost,
       :model
     ]
   end
@@ -87,7 +88,8 @@ defmodule CcInspector.Sessions.Turns do
       user_text: text,
       user_kind: kind,
       blocks: [],
-      tokens: %{input: 0, output: 0, cache_read: 0, cache_creation: 0},
+      tokens: %{input: 0, output: 0, cache_read: 0, cache_creation: 0, reasoning: 0},
+      cost: nil,
       model: nil
     }
   end
@@ -166,7 +168,8 @@ defmodule CcInspector.Sessions.Turns do
          input: tokens.input + usage.input,
          output: tokens.output + usage.output,
          cache_read: tokens.cache_read + usage.cache_read,
-         cache_creation: tokens.cache_creation + usage.cache_creation
+         cache_creation: tokens.cache_creation + usage.cache_creation,
+         reasoning: Map.get(tokens, :reasoning, 0) + Map.get(usage, :reasoning, 0)
        }, MapSet.put(seen, id)}
     end
   end
@@ -176,7 +179,8 @@ defmodule CcInspector.Sessions.Turns do
        input: tokens.input + usage.input,
        output: tokens.output + usage.output,
        cache_read: tokens.cache_read + usage.cache_read,
-       cache_creation: tokens.cache_creation + usage.cache_creation
+       cache_creation: tokens.cache_creation + usage.cache_creation,
+       reasoning: Map.get(tokens, :reasoning, 0) + Map.get(usage, :reasoning, 0)
      }, seen}
   end
 
@@ -241,6 +245,8 @@ defmodule CcInspector.Sessions.Turns do
       %{turn | blocks: paired}
     end)
   end
+
+  def pair_tool_results(turns), do: attach_tool_results(turns)
 
   defp latest(nil, b), do: b
   defp latest(a, nil), do: a

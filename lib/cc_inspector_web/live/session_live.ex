@@ -4,10 +4,11 @@ defmodule CcInspectorWeb.SessionLive do
   alias CcInspector.Sessions
 
   @impl true
-  def mount(%{"id" => id}, _session, socket) do
-    if connected?(socket), do: Sessions.subscribe(id)
+  def mount(%{"id" => id} = params, _session, socket) do
+    provider = Map.get(params, "provider", "claude")
+    if connected?(socket), do: Sessions.subscribe(provider, id)
 
-    case Sessions.get_summary(id) do
+    case Sessions.get_summary(provider, id) do
       nil ->
         {:ok,
          socket
@@ -17,21 +18,69 @@ defmodule CcInspectorWeb.SessionLive do
       summary ->
         {:ok,
          socket
+         |> assign(:provider, provider)
          |> assign(:session_id, id)
          |> assign(:summary, summary)
-         |> assign(:turns, Sessions.get_turns(id) || [])}
+         |> assign_turns(Sessions.get_turns(provider, id) || [])}
     end
   end
 
   @impl true
-  def handle_info({:session_updated, id}, %{assigns: %{session_id: id}} = socket) do
-    {:noreply,
-     socket
-     |> assign(:summary, Sessions.get_summary(id))
-     |> assign(:turns, Sessions.get_turns(id) || [])}
+  def handle_info(
+        {:session_changed, provider, id, _action},
+        %{assigns: %{provider: provider_string, session_id: id}} = socket
+      ) do
+    {:ok, parsed_provider} = Sessions.parse_provider(provider_string)
+
+    if provider == parsed_provider do
+      {:noreply, reload_session(socket)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info(
+        {:provider_changed, provider},
+        %{assigns: %{provider: provider_string}} = socket
+      ) do
+    {:ok, parsed_provider} = Sessions.parse_provider(provider_string)
+
+    if provider == parsed_provider do
+      {:noreply, reload_session(socket)}
+    else
+      {:noreply, socket}
+    end
   end
 
   def handle_info(_, socket), do: {:noreply, socket}
+
+  defp reload_session(socket) do
+    provider = socket.assigns.provider
+    id = socket.assigns.session_id
+
+    case Sessions.get_summary(provider, id) do
+      nil ->
+        socket
+        |> put_flash(:error, "Session no longer exists.")
+        |> push_navigate(to: ~p"/")
+
+      summary ->
+        socket
+        |> assign(:summary, summary)
+        |> assign_turns(Sessions.get_turns(provider, id) || [])
+    end
+  end
+
+  defp assign_turns(socket, turns) do
+    provider = socket.assigns[:provider] || "claude"
+
+    socket
+    |> assign(:turns_empty?, turns == [])
+    |> stream(:turns, turns,
+      reset: true,
+      dom_id: fn turn -> "turn-#{provider}-#{turn.id || turn.index}" end
+    )
+  end
 
   @impl true
   def render(assigns) do
@@ -39,11 +88,17 @@ defmodule CcInspectorWeb.SessionLive do
     <Layouts.app flash={@flash}>
       <div class="space-y-6">
         <.session_header summary={@summary} />
-        <div class="space-y-8">
-          <.turn_card :for={turn <- @turns} turn={turn} />
-          <p :if={@turns == []} class="text-center text-base-content/40 py-12">
+        <div id="session-turns" phx-update="stream" class="space-y-8">
+          <p
+            :if={@turns_empty?}
+            id="turns-empty-state"
+            class="text-center text-base-content/40 py-12"
+          >
             No turns recorded yet.
           </p>
+          <div :for={{id, turn} <- @streams.turns} id={id}>
+            <.turn_card turn={turn} />
+          </div>
         </div>
       </div>
     </Layouts.app>
@@ -60,9 +115,12 @@ defmodule CcInspectorWeb.SessionLive do
           <.link navigate={~p"/"} class="text-xs text-base-content/50 hover:text-base-content">
             ← All sessions
           </.link>
-          <h1 class="text-xl font-semibold tracking-tight truncate">
-            {project_name(@summary.project_cwd)}
-          </h1>
+          <div class="flex items-center gap-2 pt-1">
+            <.provider_badge provider={@summary.provider} />
+            <h1 class="text-xl font-semibold tracking-tight truncate">
+              {project_name(@summary.project_cwd)}
+            </h1>
+          </div>
           <div :if={@summary.ai_title} class="text-sm text-base-content/80 truncate">
             {@summary.ai_title}
           </div>
@@ -81,14 +139,16 @@ defmodule CcInspectorWeb.SessionLive do
         </div>
       </div>
 
-      <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 text-sm">
+      <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3 text-sm">
         <.stat label="Turns" value={@summary.turn_count} />
         <.stat label="Tool calls" value={@summary.tool_call_count} />
         <.stat label="Input" value={number(@summary.tokens.input)} />
         <.stat label="Cached read" value={number(@summary.tokens.cache_read)} />
         <.stat label="Cache write" value={number(@summary.tokens.cache_creation)} />
         <.stat label="Output" value={number(@summary.tokens.output)} />
+        <.stat label="Reasoning" value={number(Map.get(@summary.tokens, :reasoning, 0))} />
         <.stat label="Duration" value={duration(@summary.duration_ms)} />
+        <.stat :if={is_number(@summary.cost)} label="Cost" value={money(@summary.cost)} />
       </div>
 
       <div class="text-xs text-base-content/50 flex gap-4">
@@ -98,6 +158,26 @@ defmodule CcInspectorWeb.SessionLive do
     </div>
     """
   end
+
+  attr :provider, :atom, required: true
+
+  defp provider_badge(assigns) do
+    ~H"""
+    <span class={[
+      "inline-flex rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+      @provider == :claude && "bg-orange-500/10 text-orange-700 dark:text-orange-300",
+      @provider == :codex && "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+      @provider == :opencode && "bg-sky-500/10 text-sky-700 dark:text-sky-300"
+    ]}>
+      {Sessions.provider_label(@provider)}
+    </span>
+    """
+  end
+
+  defp money(value) when is_number(value),
+    do: :erlang.float_to_binary(value * 1.0, decimals: 4) <> " USD"
+
+  defp money(_), do: "—"
 
   attr :label, :string, required: true
   attr :value, :any, required: true
@@ -125,7 +205,9 @@ defmodule CcInspectorWeb.SessionLive do
           :if={@turn.tokens.input + @turn.tokens.output > 0}
           class="text-xs text-base-content/40 ml-auto tabular-nums"
         >
-          {number(@turn.tokens.input + @turn.tokens.cache_read)} in · {number(@turn.tokens.output)} out
+          {number(@turn.tokens.input)} in · {number(@turn.tokens.output)} out · {number(
+            @turn.tokens.cache_read
+          )} cached
         </span>
       </header>
 
@@ -302,6 +384,17 @@ defmodule CcInspectorWeb.SessionLive do
         class="text-xs bg-base-200/60 rounded p-2 overflow-x-auto whitespace-pre-wrap break-words max-h-96"
       ><code><%= body %></code></pre>
     </div>
+    """
+  end
+
+  defp tool_result(%{content: content} = assigns) when is_map(content) do
+    assigns = assign(assigns, :pretty_content, pretty_json(content))
+
+    ~H"""
+    <pre
+      phx-no-curly-interpolation
+      class="text-xs bg-base-200/60 rounded p-2 overflow-x-auto whitespace-pre-wrap break-words max-h-96"
+    ><code><%= @pretty_content %></code></pre>
     """
   end
 

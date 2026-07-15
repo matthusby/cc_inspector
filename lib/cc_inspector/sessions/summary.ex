@@ -6,6 +6,7 @@ defmodule CcInspector.Sessions.Summary do
   alias CcInspector.Sessions.Parser.Event
 
   defstruct [
+    :provider,
     :session_id,
     :path,
     :project_cwd,
@@ -21,6 +22,7 @@ defmodule CcInspector.Sessions.Summary do
     :tool_call_count,
     :turn_count,
     :tokens,
+    :cost,
     :first_prompt_preview,
     :ai_title
   ]
@@ -51,6 +53,7 @@ defmodule CcInspector.Sessions.Summary do
     acc = Enum.reduce(events, init, &fold/2)
 
     %__MODULE__{
+      provider: :claude,
       session_id: session_id,
       path: path,
       project_cwd: acc.cwd || slug_to_cwd(project_slug),
@@ -65,7 +68,8 @@ defmodule CcInspector.Sessions.Summary do
       assistant_message_count: acc.assistant_count,
       tool_call_count: acc.tool_count,
       turn_count: acc.turn_count,
-      tokens: acc.tokens,
+      tokens: Map.put(acc.tokens, :reasoning, 0),
+      cost: nil,
       first_prompt_preview: acc.first_prompt,
       ai_title: acc.ai_title
     }

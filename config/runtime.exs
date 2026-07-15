@@ -17,6 +17,18 @@ if claude_dir = System.get_env("CLAUDE_PROJECTS_DIR") do
   config :cc_inspector, claude_projects_dir: claude_dir
 end
 
+if codex_home = System.get_env("CODEX_HOME") do
+  config :cc_inspector, codex_home: codex_home
+end
+
+if opencode_dir = System.get_env("OPENCODE_DATA_DIR") do
+  config :cc_inspector, opencode_data_dir: opencode_dir
+end
+
+if opencode_cli = System.get_env("OPENCODE_CLI") do
+  config :cc_inspector, opencode_cli: opencode_cli
+end
+
 if config_env() == :prod do
   secret_key_base =
     System.get_env("SECRET_KEY_BASE") ||

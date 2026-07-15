@@ -13,7 +13,7 @@ defmodule CcInspectorWeb.SessionsLiveTest do
     {:ok, _view, html} = live(conn, ~p"/")
 
     assert html =~ "Sessions"
-    assert html =~ "No Claude Code sessions found yet"
+    assert html =~ "No local coding-agent sessions found yet"
   end
 
   test "renders one row per session and shows the project + first prompt", %{
@@ -73,6 +73,22 @@ defmodule CcInspectorWeb.SessionsLiveTest do
     assert html =~ "nothingmatches"
   end
 
+  test "provider pills filter the session stream", %{conn: conn, dir: dir} do
+    write_session!(dir, "-Users-me-proj-alpha", "sess-alpha", [
+      user_row(content: "claude-only prompt", cwd: "/Users/me/proj/alpha")
+    ])
+
+    {:ok, view, html} = live(conn, ~p"/")
+    assert html =~ "claude-only prompt"
+
+    html = view |> element("#provider-filter-codex") |> render_click()
+    refute html =~ "claude-only prompt"
+    assert html =~ "No sessions match"
+
+    html = view |> element("#provider-filter-all") |> render_click()
+    assert html =~ "claude-only prompt"
+  end
+
   test "PubSub session_created broadcast triggers a re-fetch", %{conn: conn, dir: dir} do
     {:ok, view, html} = live(conn, ~p"/")
     refute html =~ "later prompt"
@@ -81,7 +97,11 @@ defmodule CcInspectorWeb.SessionsLiveTest do
       user_row(content: "later prompt", cwd: "/Users/me/proj/late")
     ])
 
-    Phoenix.PubSub.broadcast(CcInspector.PubSub, "sessions", {:session_created, "sess-late"})
+    Phoenix.PubSub.broadcast(
+      CcInspector.PubSub,
+      "sessions",
+      {:session_changed, :claude, "sess-late", :created}
+    )
 
     html = render(view)
     assert html =~ "later prompt"
@@ -144,7 +164,7 @@ defmodule CcInspectorWeb.SessionsLiveTest do
     {:ok, view, _html} = live(conn, ~p"/")
 
     assert view
-           |> element(~s|a[href="/sessions/sess-alpha"]|)
+           |> element(~s|a[href="/sessions/claude/sess-alpha"]|)
            |> has_element?()
   end
 end

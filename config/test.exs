@@ -9,7 +9,10 @@ config :cc_inspector, CcInspectorWeb.Endpoint,
 
 # Point session ingest at a tmp dir during tests; tests can override.
 config :cc_inspector,
-  claude_projects_dir: Path.expand("../tmp/test_claude_projects", __DIR__)
+  claude_projects_dir: Path.expand("../tmp/test_claude_projects", __DIR__),
+  codex_home: Path.expand("../tmp/test_codex_home", __DIR__),
+  opencode_data_dir: Path.expand("../tmp/test_opencode_data", __DIR__),
+  session_providers: [:claude]
 
 # Print only warnings and errors during test
 config :logger, level: :warning

@@ -9,7 +9,7 @@ defmodule CcInspector.Sessions.Cache do
 
   use GenServer
 
-  alias CcInspector.Sessions.{Parser, Summary, Turns}
+  alias CcInspector.Sessions.{CodexParser, Parser, Summary, Turns}
 
   @table __MODULE__
 
@@ -38,7 +38,13 @@ defmodule CcInspector.Sessions.Cache do
     end
   end
 
-  def invalidate(path), do: :ets.delete(@table, path)
+  def codex_document(path),
+    do: cached_for_path({:codex, path}, path, fn -> CodexParser.parse_file(path) end)
+
+  def invalidate(path) do
+    :ets.delete(@table, path)
+    :ets.delete(@table, {:codex, path})
+  end
 
   ## Server
 
@@ -60,26 +66,31 @@ defmodule CcInspector.Sessions.Cache do
 
   defp summary_for_path(path) do
     case events_for_path(path) do
+      nil -> nil
       [] -> nil
       events -> Summary.from_events(events, path)
     end
   end
 
   defp events_for_path(path) do
+    cached_for_path(path, path, fn -> Parser.parse_file(path) end)
+  end
+
+  defp cached_for_path(key, path, loader) do
     case File.stat(path) do
       {:ok, %File.Stat{mtime: mtime, size: size}} ->
-        case :ets.lookup(@table, path) do
-          [{^path, ^mtime, ^size, events}] ->
-            events
+        case :ets.lookup(@table, key) do
+          [{^key, ^mtime, ^size, value}] ->
+            value
 
           _ ->
-            events = Parser.parse_file(path)
-            :ets.insert(@table, {path, mtime, size, events})
-            events
+            value = loader.()
+            :ets.insert(@table, {key, mtime, size, value})
+            value
         end
 
       _ ->
-        []
+        nil
     end
   end
 end
