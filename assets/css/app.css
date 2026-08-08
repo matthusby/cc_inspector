@@ -112,3 +112,62 @@
 .collapsible-chevron.open {
   transform: rotate(90deg);
 }
+
+/* Chart palette. Slots 1-4 carry token types, slots 5-7 carry providers —
+   deliberately different hues so the same color never means two things across
+   the two charts sitting side by side. Both columns are validated categorical
+   steps for their own surface (base-100), not one set auto-flipped. */
+.viz {
+  --viz-1: #2a78d6;
+  --viz-2: #eb6834;
+  --viz-3: #1baf7a;
+  --viz-4: #eda100;
+  --viz-5: #e87ba4;
+  --viz-6: #008300;
+  --viz-7: #4a3aa7;
+  --viz-grid: #e1e0d9;
+  --viz-axis: #c3c2b7;
+  --viz-neutral: #52514e;
+}
+
+/* Hovering anywhere in a day's column highlights that day in both charts at
+   once, so the two decompositions read as one figure. */
+.viz-slot {
+  fill: transparent;
+  transition: fill 120ms ease;
+}
+
+.viz-slot[data-active] {
+  fill: color-mix(in oklab, var(--color-base-content) 7%, transparent);
+}
+
+/* Declared under both scopes: the media query covers the OS setting when the
+   toggle is on "system" (which removes data-theme entirely), and the explicit
+   scope covers the toggle, which has to win either way. */
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) .viz {
+    --viz-1: #3987e5;
+    --viz-2: #d95926;
+    --viz-3: #199e70;
+    --viz-4: #c98500;
+    --viz-5: #d55181;
+    --viz-6: #008300;
+    --viz-7: #9085e9;
+    --viz-grid: #383f49;
+    --viz-axis: #4a525e;
+    --viz-neutral: #c3c2b7;
+  }
+}
+
+:root[data-theme="dark"] .viz {
+  --viz-1: #3987e5;
+  --viz-2: #d95926;
+  --viz-3: #199e70;
+  --viz-4: #c98500;
+  --viz-5: #d55181;
+  --viz-6: #008300;
+  --viz-7: #9085e9;
+  --viz-grid: #383f49;
+  --viz-axis: #4a525e;
+  --viz-neutral: #c3c2b7;
+}

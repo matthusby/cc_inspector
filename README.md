@@ -8,7 +8,7 @@ It reads the transcripts those tools already keep on your machine and renders th
 
 ## What you get
 
-- **Token usage at a glance** — input / cached / output / reasoning totals across the last 7 days.
+- **Usage dashboard** — 30-day input / cached / output / total tokens, each with a 7-day figure, a week-over-week trend, and a sparkline, above daily stacked-bar charts broken down by token type and by provider.
 - **Sessions index** — local sessions grouped by project and sorted by recent activity, with provider filters, titles, prompts, models, duration, turn count, and token usage.
 - **Session detail** — the full conversation rendered turn-by-turn: user prompts, assistant text, thinking blocks (with an "encrypted" pill for redacted thinking from newer models), and paired tool calls + results with pretty-printed input and output. Long assistant blocks collapse so you can scan a session quickly.
 - **Filter** — narrow the list by provider, project path, prompt text, title, branch, or session id.

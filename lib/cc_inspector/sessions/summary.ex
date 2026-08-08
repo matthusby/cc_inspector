@@ -4,6 +4,7 @@ defmodule CcInspector.Sessions.Summary do
   """
 
   alias CcInspector.Sessions.Parser.Event
+  alias CcInspector.Sessions.Usage
 
   defstruct [
     :provider,
@@ -24,7 +25,11 @@ defmodule CcInspector.Sessions.Summary do
     :tokens,
     :cost,
     :first_prompt_preview,
-    :ai_title
+    :ai_title,
+    # Hourly token buckets for this session's whole lifetime. Built here, where
+    # the events are already being walked and message-id dedup already happens,
+    # so the dashboard never re-reads a file to draw a chart. See Usage.
+    usage: %{}
   ]
 
   def from_events([], _path), do: nil
@@ -45,6 +50,7 @@ defmodule CcInspector.Sessions.Summary do
       tool_count: 0,
       turn_count: 0,
       tokens: %{input: 0, output: 0, cache_read: 0, cache_creation: 0},
+      usage: Usage.new(),
       first_prompt: nil,
       ai_title: nil,
       seen_message_ids: MapSet.new()
@@ -71,7 +77,8 @@ defmodule CcInspector.Sessions.Summary do
       tokens: Map.put(acc.tokens, :reasoning, 0),
       cost: nil,
       first_prompt_preview: acc.first_prompt,
-      ai_title: acc.ai_title
+      ai_title: acc.ai_title,
+      usage: acc.usage
     }
   end
 
@@ -132,7 +139,7 @@ defmodule CcInspector.Sessions.Summary do
 
   defp count_event(acc, _), do: acc
 
-  defp add_usage(acc, %Event{type: :assistant, usage: %{} = usage, message_id: id})
+  defp add_usage(acc, %Event{type: :assistant, usage: %{} = usage, message_id: id} = ev)
        when is_binary(id) do
     if MapSet.member?(acc.seen_message_ids, id) do
       acc
@@ -145,7 +152,8 @@ defmodule CcInspector.Sessions.Summary do
             output: acc.tokens.output + usage.output,
             cache_read: acc.tokens.cache_read + usage.cache_read,
             cache_creation: acc.tokens.cache_creation + usage.cache_creation
-          }
+          },
+          usage: Usage.add(acc.usage, ev.timestamp, usage)
       }
     end
   end

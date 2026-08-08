@@ -10,15 +10,42 @@ defmodule CcInspector.Sessions do
   # epoch so they sort to the bottom instead of crashing.
   @epoch ~U[1970-01-01 00:00:00Z]
 
-  def list_summaries do
-    enabled_providers()
-    |> Task.async_stream(&list_provider_summaries/1, timeout: :infinity)
-    |> Enum.flat_map(fn
-      {:ok, summaries} -> summaries
-      _ -> []
-    end)
-    |> Enum.uniq_by(&{&1.provider, &1.session_id})
-    |> Enum.sort_by(&(&1.last_activity_at || @epoch), {:desc, DateTime})
+  def list_summaries, do: load().summaries
+
+  @doc """
+  Loads every enabled provider, reporting which ones failed rather than folding
+  a failure into an empty list — one provider being unreadable should show up in
+  the UI, not silently shrink the numbers.
+  """
+  def load do
+    results =
+      enabled_providers()
+      |> Task.async_stream(&{&1, load_provider(&1)}, timeout: :infinity)
+      |> Enum.map(fn
+        {:ok, result} -> result
+        {:exit, _reason} -> {nil, {:error, :exited}}
+      end)
+
+    summaries =
+      results
+      |> Enum.flat_map(fn
+        {_provider, {:ok, summaries}} -> summaries
+        _ -> []
+      end)
+      |> Enum.uniq_by(&{&1.provider, &1.session_id})
+      |> Enum.sort_by(&(&1.last_activity_at || @epoch), {:desc, DateTime})
+
+    failed = for {provider, {:error, _}} <- results, not is_nil(provider), do: provider
+
+    %{summaries: summaries, failed_providers: failed}
+  end
+
+  defp load_provider(:opencode), do: OpenCode.list_summaries_result()
+
+  defp load_provider(provider) do
+    {:ok, list_provider_summaries(provider)}
+  rescue
+    error -> {:error, error}
   end
 
   def get_summary(provider, session_id) do

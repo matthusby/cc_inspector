@@ -94,4 +94,88 @@ defmodule CcInspector.Sessions.OpenCodeParserTest do
     assert %Block{data: %{result: %{content: "80 tests, 0 failures"}}} =
              Enum.find(turn.blocks, &match?(%Block{kind: :tool_use}, &1))
   end
+
+  describe "usage_from_rows/1" do
+    test "groups the SQL rollup into per-session hourly buckets" do
+      rows = [
+        %{
+          "session_id" => "a",
+          "hour" => 100,
+          "input" => 10,
+          "output" => 2,
+          "cache_read" => 5,
+          "cache_creation" => 1,
+          "reasoning" => 3
+        },
+        %{
+          "session_id" => "a",
+          "hour" => 101,
+          "input" => 7,
+          "output" => 1,
+          "cache_read" => 0,
+          "cache_creation" => 0,
+          "reasoning" => 0
+        },
+        %{
+          "session_id" => "b",
+          "hour" => 100,
+          "input" => 4,
+          "output" => 0,
+          "cache_read" => 0,
+          "cache_creation" => 0,
+          "reasoning" => 0
+        }
+      ]
+
+      usage = OpenCodeParser.usage_from_rows(rows)
+
+      assert Map.keys(usage) |> Enum.sort() == ["a", "b"]
+      assert map_size(usage["a"]) == 2
+
+      assert usage["a"][100] == %{
+               input: 10,
+               output: 2,
+               cache_read: 5,
+               cache_creation: 1,
+               reasoning: 3
+             }
+
+      assert usage["a"][101].input == 7
+      assert usage["b"][100].input == 4
+    end
+
+    test "sums rows that land in the same session and hour" do
+      rows = [
+        %{"session_id" => "a", "hour" => 100, "input" => 10},
+        %{"session_id" => "a", "hour" => 100, "input" => 5}
+      ]
+
+      assert OpenCodeParser.usage_from_rows(rows)["a"][100].input == 15
+    end
+
+    test "tolerates nulls, floats, and malformed rows" do
+      rows = [
+        %{"session_id" => "a", "hour" => 100, "input" => nil, "output" => 3.0},
+        %{"session_id" => nil, "hour" => 100, "input" => 99},
+        %{"session_id" => "b", "hour" => nil, "input" => 99},
+        %{"nonsense" => true}
+      ]
+
+      usage = OpenCodeParser.usage_from_rows(rows)
+
+      assert Map.keys(usage) == ["a"]
+
+      assert usage["a"][100] == %{
+               input: 0,
+               output: 3,
+               cache_read: 0,
+               cache_creation: 0,
+               reasoning: 0
+             }
+    end
+
+    test "returns an empty map for anything that isn't a list" do
+      assert OpenCodeParser.usage_from_rows(nil) == %{}
+    end
+  end
 end

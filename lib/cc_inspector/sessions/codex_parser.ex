@@ -10,6 +10,7 @@ defmodule CcInspector.Sessions.CodexParser do
   alias CcInspector.Sessions.Summary
   alias CcInspector.Sessions.Turns
   alias CcInspector.Sessions.Turns.{Block, Turn}
+  alias CcInspector.Sessions.Usage
 
   @empty_tokens %{
     input: 0,
@@ -75,7 +76,8 @@ defmodule CcInspector.Sessions.CodexParser do
       turns: [],
       assistant_count: 0,
       tool_count: 0,
-      total_tokens: @empty_tokens
+      total_tokens: @empty_tokens,
+      usage: Usage.new()
     }
   end
 
@@ -220,16 +222,22 @@ defmodule CcInspector.Sessions.CodexParser do
     info = payload["info"] || %{}
     last = token_usage(info["last_token_usage"])
     total = token_usage(info["total_token_usage"])
+    timestamp = row_timestamp(row)
 
     acc =
       acc
-      |> bump_timestamp(row_timestamp(row))
+      |> bump_timestamp(timestamp)
       |> Map.put(:total_tokens, if(total == @empty_tokens, do: acc.total_tokens, else: total))
 
     if last == @empty_tokens do
       acc
     else
-      update_current(acc, fn turn -> %{turn | tokens: last} end)
+      # A turn emits one token_count row per model request, so these accumulate.
+      # Assigning `last` here instead of adding it undercounted every turn by
+      # however many requests it took, which for long turns is a large factor.
+      acc
+      |> Map.put(:usage, Usage.add(acc.usage, timestamp, last))
+      |> update_current(fn turn -> %{turn | tokens: Usage.sum(turn.tokens, last)} end)
     end
   end
 
@@ -331,7 +339,8 @@ defmodule CcInspector.Sessions.CodexParser do
       tokens: tokens,
       cost: nil,
       first_prompt_preview: turns |> List.first() |> prompt_preview(),
-      ai_title: nil
+      ai_title: nil,
+      usage: acc.usage
     }
 
     %{summary: summary, turns: turns, source: acc.source}

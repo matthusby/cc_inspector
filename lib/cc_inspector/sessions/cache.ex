@@ -13,6 +13,13 @@ defmodule CcInspector.Sessions.Cache do
 
   @table __MODULE__
 
+  # Bump whenever the shape of a cached value changes. Entries are plain terms,
+  # so a struct that gains a field leaves already-cached copies without it —
+  # which raises at the read site rather than anywhere near the cause. Stamping
+  # the version makes stale entries simply miss and reload. Matters in dev,
+  # where code reloads but the table survives.
+  @version 2
+
   ## Client
 
   def start_link(_opts), do: GenServer.start_link(__MODULE__, [], name: __MODULE__)
@@ -44,7 +51,28 @@ defmodule CcInspector.Sessions.Cache do
   def invalidate(path) do
     :ets.delete(@table, path)
     :ets.delete(@table, {:codex, path})
+    :ets.delete(@table, {:summary, path})
   end
+
+  @doc """
+  Memoises a provider-wide value that isn't derived from a single file, so it
+  has no mtime to validate against. Invalidated explicitly by the watcher.
+  """
+  def fetch_provider(key, loader) do
+    cache_key = {:provider, key}
+
+    case :ets.lookup(@table, cache_key) do
+      [{^cache_key, @version, value}] ->
+        value
+
+      _ ->
+        value = loader.()
+        :ets.insert(@table, {cache_key, @version, value})
+        value
+    end
+  end
+
+  def invalidate_provider(key), do: :ets.delete(@table, {:provider, key})
 
   ## Server
 
@@ -64,12 +92,17 @@ defmodule CcInspector.Sessions.Cache do
     Path.wildcard(Path.join([dir, "*", session_id <> ".jsonl"])) |> List.first()
   end
 
+  # Cached in its own right, not just derived from the cached events. The index
+  # only ever wants summaries, and re-folding every event on each warm read cost
+  # more than the rest of the scan combined.
   defp summary_for_path(path) do
-    case events_for_path(path) do
-      nil -> nil
-      [] -> nil
-      events -> Summary.from_events(events, path)
-    end
+    cached_for_path({:summary, path}, path, fn ->
+      case events_for_path(path) do
+        nil -> nil
+        [] -> nil
+        events -> Summary.from_events(events, path)
+      end
+    end)
   end
 
   defp events_for_path(path) do
@@ -80,12 +113,12 @@ defmodule CcInspector.Sessions.Cache do
     case File.stat(path) do
       {:ok, %File.Stat{mtime: mtime, size: size}} ->
         case :ets.lookup(@table, key) do
-          [{^key, ^mtime, ^size, value}] ->
+          [{^key, @version, ^mtime, ^size, value}] ->
             value
 
           _ ->
             value = loader.()
-            :ets.insert(@table, {key, mtime, size, value})
+            :ets.insert(@table, {key, @version, mtime, size, value})
             value
         end
 

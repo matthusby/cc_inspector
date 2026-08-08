@@ -10,7 +10,8 @@ defmodule CcInspectorWeb.SessionsLiveTest do
   end
 
   test "renders an empty state when there are no sessions", %{conn: conn} do
-    {:ok, _view, html} = live(conn, ~p"/")
+    {:ok, view, _html} = live(conn, ~p"/")
+    html = render_async(view)
 
     assert html =~ "Sessions"
     assert html =~ "No local coding-agent sessions found yet"
@@ -34,7 +35,8 @@ defmodule CcInspectorWeb.SessionsLiveTest do
       assistant_row(message_id: "mb1", content: [text_block("on it")])
     ])
 
-    {:ok, _view, html} = live(conn, ~p"/")
+    {:ok, view, _html} = live(conn, ~p"/")
+    html = render_async(view)
 
     assert html =~ "alpha"
     assert html =~ "beta"
@@ -54,6 +56,7 @@ defmodule CcInspectorWeb.SessionsLiveTest do
     ])
 
     {:ok, view, _html} = live(conn, ~p"/")
+    render_async(view)
 
     html = render_change(view, "filter", %{"q" => "alpha"})
 
@@ -67,6 +70,7 @@ defmodule CcInspectorWeb.SessionsLiveTest do
     ])
 
     {:ok, view, _html} = live(conn, ~p"/")
+    render_async(view)
 
     html = render_change(view, "filter", %{"q" => "nothingmatches"})
     assert html =~ ~s|No sessions match|
@@ -78,8 +82,8 @@ defmodule CcInspectorWeb.SessionsLiveTest do
       user_row(content: "claude-only prompt", cwd: "/Users/me/proj/alpha")
     ])
 
-    {:ok, view, html} = live(conn, ~p"/")
-    assert html =~ "claude-only prompt"
+    {:ok, view, _html} = live(conn, ~p"/")
+    assert render_async(view) =~ "claude-only prompt"
 
     html = view |> element("#provider-filter-codex") |> render_click()
     refute html =~ "claude-only prompt"
@@ -90,8 +94,8 @@ defmodule CcInspectorWeb.SessionsLiveTest do
   end
 
   test "PubSub session_created broadcast triggers a re-fetch", %{conn: conn, dir: dir} do
-    {:ok, view, html} = live(conn, ~p"/")
-    refute html =~ "later prompt"
+    {:ok, view, _html} = live(conn, ~p"/")
+    refute render_async(view) =~ "later prompt"
 
     write_session!(dir, "-Users-me-proj-late", "sess-late", [
       user_row(content: "later prompt", cwd: "/Users/me/proj/late")
@@ -103,8 +107,8 @@ defmodule CcInspectorWeb.SessionsLiveTest do
       {:session_changed, :claude, "sess-late", :created}
     )
 
-    html = render(view)
-    assert html =~ "later prompt"
+    _ = render(view)
+    assert render_async(view) =~ "later prompt"
   end
 
   test "shows ai_title as the row lead with first_prompt as a secondary line", %{
@@ -117,7 +121,8 @@ defmodule CcInspectorWeb.SessionsLiveTest do
       ai_title_row("sess-titled", "Snappy AI title")
     ])
 
-    {:ok, _view, html} = live(conn, ~p"/")
+    {:ok, view, _html} = live(conn, ~p"/")
+    html = render_async(view)
 
     assert html =~ "Snappy AI title"
     assert html =~ "the user typed something verbose"
@@ -128,7 +133,8 @@ defmodule CcInspectorWeb.SessionsLiveTest do
       user_row(content: "explain this", cwd: "/Users/me/proj/untitled")
     ])
 
-    {:ok, _view, html} = live(conn, ~p"/")
+    {:ok, view, _html} = live(conn, ~p"/")
+    html = render_async(view)
 
     assert html =~ "explain this"
   end
@@ -143,7 +149,8 @@ defmodule CcInspectorWeb.SessionsLiveTest do
       ])
     end
 
-    {:ok, view, html} = live(conn, ~p"/")
+    {:ok, view, _html} = live(conn, ~p"/")
+    html = render_async(view)
 
     assert html =~ "Show 2 more sessions"
 
@@ -162,9 +169,126 @@ defmodule CcInspectorWeb.SessionsLiveTest do
     ])
 
     {:ok, view, _html} = live(conn, ~p"/")
+    render_async(view)
 
     assert view
            |> element(~s|a[href="/sessions/claude/sess-alpha"]|)
            |> has_element?()
+  end
+
+  describe "usage dashboard" do
+    setup %{dir: dir} do
+      write_session!(dir, "-Users-me-proj-alpha", "sess-alpha", [
+        user_row(content: "alpha prompt", cwd: "/Users/me/proj/alpha"),
+        assistant_row(
+          message_id: "ma1",
+          content: [text_block("ok")],
+          usage: %{input: 500, output: 20, cache_read: 9_000, cache_creation: 100}
+        )
+      ])
+
+      :ok
+    end
+
+    test "renders the stat cards and both charts", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/")
+      render_async(view)
+
+      for id <- ~w(stat-input stat-cached stat-output stat-total) do
+        assert has_element?(view, "##{id}")
+      end
+
+      assert has_element?(view, "#chart-types")
+      assert has_element?(view, "#chart-providers")
+      assert has_element?(view, "#legend-types")
+    end
+
+    test "cards report the totals the chart is built from", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/")
+      html = render_async(view)
+
+      # 500 input + (9_000 + 100) cached + 20 output = 9_620 total
+      assert html =~ "9.6K"
+      assert html =~ "9.1K"
+    end
+
+    test "the collapse toggle hides the body and remembers the choice", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/")
+      render_async(view)
+
+      assert has_element?(view, "#usage-dashboard-toggle[aria-expanded='true']")
+
+      view |> element("#usage-dashboard-toggle") |> render_click()
+      assert has_element?(view, "#usage-dashboard-toggle[aria-expanded='false']")
+
+      view |> element("#usage-dashboard-toggle") |> render_click()
+      assert has_element?(view, "#usage-dashboard-toggle[aria-expanded='true']")
+    end
+
+    test "restore_dashboard applies the browser's stored state", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/")
+      render_async(view)
+
+      render_hook(view, "restore_dashboard", %{"collapsed" => true})
+      assert has_element?(view, "#usage-dashboard-toggle[aria-expanded='false']")
+    end
+
+    test "the legend toggles a series off and back on", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/")
+      render_async(view)
+
+      before = render(view)
+      view |> element("#legend-types-cached") |> render_click()
+      refute render(view) == before
+
+      view |> element("#legend-types-cached") |> render_click()
+      assert render(view) == before
+    end
+
+    test "reasoning is disabled when no visible provider reports it", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/")
+      render_async(view)
+
+      # Only Claude data here, and Claude never reports reasoning tokens.
+      assert has_element?(view, "#legend-types-reasoning[disabled]")
+    end
+
+    test "the last remaining series cannot be toggled off", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/")
+      render_async(view)
+
+      for key <- ~w(cached output) do
+        view |> element("#legend-types-#{key}") |> render_click()
+      end
+
+      # Input is the only toggleable series left, so clicking it is a no-op
+      # rather than a chart with nothing in it.
+      before = render(view)
+      view |> element("#legend-types-input") |> render_click()
+
+      assert render(view) == before
+      assert has_element?(view, "#chart-types")
+    end
+
+    test "pinning a provider stands the provider chart down", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/")
+      render_async(view)
+
+      assert has_element?(view, "#chart-providers")
+
+      view |> element("#provider-filter-claude") |> render_click()
+      refute has_element?(view, "#chart-providers")
+      assert has_element?(view, "#chart-types")
+    end
+
+    test "the text filter does not reach the dashboard", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/")
+      render_async(view)
+
+      render_change(view, "filter", %{"q" => "nothingmatches"})
+
+      assert has_element?(view, "#chart-types")
+      assert render(view) =~ "9.6K"
+    end
   end
 end

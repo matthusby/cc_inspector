@@ -51,6 +51,8 @@ defmodule CcInspector.Sessions.Watcher do
   end
 
   def handle_info(:opencode_changed, state) do
+    Cache.invalidate_provider(:opencode_summaries)
+    Cache.invalidate_provider(:opencode_usage)
     broadcast("sessions", {:provider_changed, :opencode})
     broadcast("provider:opencode", {:provider_changed, :opencode})
     {:noreply, %{state | opencode_timer: nil}}

@@ -50,6 +50,34 @@ defmodule CcInspectorWeb.Format do
     |> String.reverse()
   end
 
+  @doc """
+  Compact number for display where the exact digits don't matter, e.g.
+  `853_722_909` becomes `"853.7M"`. Pair it with `number/1` in a title attribute
+  when the precise value should stay one hover away.
+  """
+  def abbrev_number(nil), do: "0"
+  def abbrev_number(n) when is_integer(n) and n < 0, do: "-" <> abbrev_number(-n)
+  def abbrev_number(n) when is_integer(n) and n < 1_000, do: Integer.to_string(n)
+  def abbrev_number(n) when n < 1_000_000, do: scaled(n, 1_000, "K")
+  def abbrev_number(n) when n < 1_000_000_000, do: scaled(n, 1_000_000, "M")
+  def abbrev_number(n) when n < 1_000_000_000_000, do: scaled(n, 1_000_000_000, "B")
+  def abbrev_number(n), do: scaled(n, 1_000_000_000_000, "T")
+
+  @doc "Signed percentage for trend deltas, e.g. `\"+12.4%\"`. Nil renders as an em dash."
+  def percent_delta(nil), do: "—"
+
+  def percent_delta(value) when is_number(value) do
+    sign = if value < 0, do: "−", else: "+"
+    sign <> :erlang.float_to_binary(abs(value) / 1, decimals: 1) <> "%"
+  end
+
   def project_name(cwd) when is_binary(cwd), do: Path.basename(cwd)
   def project_name(_), do: "—"
+
+  defp scaled(n, unit, suffix) do
+    (n / unit)
+    |> :erlang.float_to_binary(decimals: 1)
+    |> String.replace_suffix(".0", "")
+    |> Kernel.<>(suffix)
+  end
 end

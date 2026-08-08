@@ -3,6 +3,7 @@ defmodule CcInspector.Sessions.OpenCodeParser do
 
   alias CcInspector.Sessions.Summary
   alias CcInspector.Sessions.Turns.{Block, Turn}
+  alias CcInspector.Sessions.Usage
 
   @empty_tokens %{
     input: 0,
@@ -45,6 +46,33 @@ defmodule CcInspector.Sessions.OpenCodeParser do
       ai_title: row["title"]
     }
   end
+
+  @doc """
+  Turns rows of `session_id, hour, <token sums>` into
+  `%{session_id => hourly buckets}`.
+  """
+  def usage_from_rows(rows) when is_list(rows) do
+    Enum.reduce(rows, %{}, fn row, acc ->
+      with session_id when is_binary(session_id) <- row["session_id"],
+           hour when is_integer(hour) <- row["hour"] do
+        tokens = %{
+          input: int(row["input"]),
+          output: int(row["output"]),
+          cache_read: int(row["cache_read"]),
+          cache_creation: int(row["cache_creation"]),
+          reasoning: int(row["reasoning"])
+        }
+
+        Map.update(acc, session_id, Usage.add(Usage.new(), hour, tokens), fn buckets ->
+          Usage.add(buckets, hour, tokens)
+        end)
+      else
+        _ -> acc
+      end
+    end)
+  end
+
+  def usage_from_rows(_), do: %{}
 
   def turns_from_export(%{"messages" => messages}) when is_list(messages) do
     messages
@@ -208,6 +236,10 @@ defmodule CcInspector.Sessions.OpenCodeParser do
   defp preview(text) when is_binary(text) do
     text |> String.replace(~r/\s+/, " ") |> String.trim() |> String.slice(0, 140)
   end
+
+  defp int(value) when is_integer(value), do: value
+  defp int(value) when is_float(value), do: trunc(value)
+  defp int(_), do: 0
 
   defp empty_to_nil(text) when text in [nil, ""], do: nil
   defp empty_to_nil(text), do: text

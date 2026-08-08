@@ -1,24 +1,40 @@
 defmodule CcInspectorWeb.SessionsLive do
   use CcInspectorWeb, :live_view
 
+  import CcInspectorWeb.Dashboard
+
   alias CcInspector.Sessions
+  alias CcInspector.Sessions.Dashboard
 
   @sessions_per_project 10
-  @seven_days_seconds 7 * 86_400
   # Fallback for sessions with no timestamped entries (nil last_activity_at),
-  # so DateTime sorts don't crash. See Sessions.list_summaries/0.
+  # so DateTime sorts don't crash. See Sessions.load/0.
   @epoch ~U[1970-01-01 00:00:00Z]
 
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket), do: Sessions.subscribe()
 
+    socket =
+      socket
+      |> assign(:filter, "")
+      |> assign(:provider_filter, "all")
+      |> assign(:expanded_projects, MapSet.new())
+      |> assign(:summaries, [])
+      |> assign(:failed_providers, [])
+      |> assign(:loading?, false)
+      |> assign(:reload_queued?, false)
+      |> assign(:dashboard_collapsed?, false)
+      |> assign(:hidden_types, [])
+      |> assign(:hidden_providers, [])
+      |> assign(:dashboard, Dashboard.empty())
+      |> refresh_groups()
+
+    # A cold scan reads well over a gigabyte of JSONL. Loading it off the mount
+    # means the page paints its shell and skeletons immediately instead of
+    # holding a blank response open for several seconds.
     {:ok,
-     socket
-     |> assign(:filter, "")
-     |> assign(:provider_filter, "all")
-     |> assign(:expanded_projects, MapSet.new())
-     |> assign_summaries()}
+     if(connected?(socket), do: load_summaries(socket), else: assign(socket, :loading?, true))}
   end
 
   @impl true
@@ -41,22 +57,112 @@ defmodule CcInspectorWeb.SessionsLive do
     {:noreply, socket |> assign(:expanded_projects, expanded) |> refresh_groups()}
   end
 
+  def handle_event("toggle_dashboard", _params, socket) do
+    collapsed = not socket.assigns.dashboard_collapsed?
+
+    {:noreply,
+     socket
+     |> assign(:dashboard_collapsed?, collapsed)
+     |> push_event("dashboard:collapsed", %{collapsed: collapsed})}
+  end
+
+  def handle_event("restore_dashboard", %{"collapsed" => collapsed}, socket) do
+    {:noreply, assign(socket, :dashboard_collapsed?, collapsed == true)}
+  end
+
+  def handle_event("toggle_type", %{"key" => key}, socket) do
+    toggleable = toggleable_types(socket)
+    parsed = token_key(key)
+
+    if parsed && parsed in toggleable do
+      {:noreply, toggle_series(socket, :hidden_types, parsed, toggleable)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("toggle_provider", %{"key" => key}, socket) do
+    available = Enum.map(socket.assigns.dashboard.by_provider, & &1.provider)
+
+    case Sessions.parse_provider(key) do
+      {:ok, provider} -> {:noreply, toggle_series(socket, :hidden_providers, provider, available)}
+      :error -> {:noreply, socket}
+    end
+  end
+
   @impl true
   def handle_info({:session_changed, _provider, _id, _action}, socket) do
-    {:noreply, assign_summaries(socket)}
+    {:noreply, load_summaries(socket)}
   end
 
   def handle_info({:provider_changed, _provider}, socket) do
-    {:noreply, assign_summaries(socket)}
+    {:noreply, load_summaries(socket)}
   end
 
-  defp assign_summaries(socket) do
-    summaries = Sessions.list_summaries()
+  @impl true
+  def handle_async(:summaries, {:ok, %{summaries: summaries, failed_providers: failed}}, socket) do
+    socket =
+      socket
+      |> assign(:loading?, false)
+      |> assign(:summaries, summaries)
+      |> assign(:failed_providers, failed)
+      |> refresh_groups()
 
-    socket
-    |> assign(:summaries, summaries)
-    |> refresh_groups()
+    if socket.assigns.reload_queued? do
+      {:noreply, socket |> assign(:reload_queued?, false) |> load_summaries()}
+    else
+      {:noreply, socket}
+    end
   end
+
+  def handle_async(:summaries, {:exit, _reason}, socket) do
+    {:noreply,
+     socket
+     |> assign(:loading?, false)
+     |> assign(:reload_queued?, false)
+     |> assign(:failed_providers, Sessions.enabled_providers())}
+  end
+
+  # Filesystem events arrive in bursts. Rather than spawn a scan per event,
+  # queue at most one follow-up and run it when the in-flight scan lands.
+  defp load_summaries(socket) do
+    if socket.assigns.loading? do
+      assign(socket, :reload_queued?, true)
+    else
+      socket
+      |> assign(:loading?, true)
+      |> start_async(:summaries, &Sessions.load/0)
+    end
+  end
+
+  # Toggling the last visible series off would leave an empty chart that reads
+  # as broken, so the final one stays on.
+  defp toggle_series(socket, assign_key, value, available) do
+    hidden = socket.assigns[assign_key]
+
+    cond do
+      value in hidden -> assign(socket, assign_key, List.delete(hidden, value))
+      length(available) - length(hidden) <= 1 -> socket
+      true -> assign(socket, assign_key, [value | hidden])
+    end
+  end
+
+  # Reasoning is greyed out when no visible provider reports it, so it must not
+  # count toward "series still showing" either — otherwise turning the others
+  # off leaves a chart whose only enabled series can never have data.
+  defp toggleable_types(socket) do
+    if Enum.any?(socket.assigns.dashboard.by_provider, &Dashboard.reports_reasoning?(&1.provider)) do
+      token_keys()
+    else
+      token_keys() -- [:reasoning]
+    end
+  end
+
+  defp token_key("input"), do: :input
+  defp token_key("cached"), do: :cached
+  defp token_key("output"), do: :output
+  defp token_key("reasoning"), do: :reasoning
+  defp token_key(_), do: nil
 
   defp visible_summaries(summaries, q, provider_filter) do
     needle = String.downcase(q)
@@ -74,27 +180,6 @@ defmodule CcInspectorWeb.SessionsLive do
 
       provider_matches? and text_matches?
     end)
-  end
-
-  defp seven_day_totals(summaries) do
-    cutoff = DateTime.add(DateTime.utc_now(), -@seven_days_seconds, :second)
-
-    summaries
-    |> Enum.filter(fn s ->
-      s.last_activity_at && DateTime.compare(s.last_activity_at, cutoff) != :lt
-    end)
-    |> Enum.reduce(
-      %{input: 0, cache_read: 0, cache_creation: 0, output: 0, reasoning: 0},
-      fn s, acc ->
-        %{
-          input: acc.input + (s.tokens.input || 0),
-          cache_read: acc.cache_read + (s.tokens.cache_read || 0),
-          cache_creation: acc.cache_creation + (s.tokens.cache_creation || 0),
-          output: acc.output + (s.tokens.output || 0),
-          reasoning: acc.reasoning + Map.get(s.tokens, :reasoning, 0)
-        }
-      end
-    )
   end
 
   defp grouped_summaries(summaries, filter, provider_filter) do
@@ -132,7 +217,7 @@ defmodule CcInspectorWeb.SessionsLive do
     |> assign(:groups_empty?, groups == [])
     |> assign(:group_count, length(groups))
     |> assign(:visible_count, length(visible))
-    |> assign(:totals_7d, seven_day_totals(provider_summaries))
+    |> assign(:dashboard, Dashboard.build(provider_summaries))
     |> stream(:groups, groups,
       reset: true,
       dom_id: fn group -> "project-group-#{group.id}" end
@@ -144,16 +229,15 @@ defmodule CcInspectorWeb.SessionsLive do
     ~H"""
     <Layouts.app flash={@flash}>
       <div class="space-y-6">
-        <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <.token_card label="Input" value={@totals_7d.input} />
-          <.token_card
-            label="Cached"
-            value={@totals_7d.cache_read}
-            hint={"cache_creation: #{number(@totals_7d.cache_creation)}"}
-          />
-          <.token_card label="Output" value={@totals_7d.output} />
-          <.token_card label="Reasoning" value={@totals_7d.reasoning} />
-        </div>
+        <.usage_dashboard
+          dashboard={@dashboard}
+          collapsed={@dashboard_collapsed?}
+          loading={@loading?}
+          failed_providers={@failed_providers}
+          hidden_types={@hidden_types}
+          hidden_providers={@hidden_providers}
+          provider_filter={@provider_filter}
+        />
 
         <div class="flex items-end justify-between gap-4">
           <div>
@@ -231,25 +315,6 @@ defmodule CcInspectorWeb.SessionsLive do
         </div>
       </div>
     </Layouts.app>
-    """
-  end
-
-  attr :label, :string, required: true
-  attr :value, :integer, required: true
-  attr :hint, :string, default: nil
-
-  defp token_card(assigns) do
-    ~H"""
-    <div
-      class="rounded-lg border border-base-300 bg-base-100 px-4 py-3"
-      title={@hint}
-    >
-      <div class="text-xs uppercase tracking-wide text-base-content/50">{@label}</div>
-      <div class="mt-1 text-xl font-semibold tabular-nums text-base-content">
-        {number(@value)}
-      </div>
-      <div class="text-xs text-base-content/40 mt-0.5">tokens · last 7 days</div>
-    </div>
     """
   end
 

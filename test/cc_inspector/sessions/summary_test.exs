@@ -4,6 +4,7 @@ defmodule CcInspector.Sessions.SummaryTest do
   import CcInspector.SessionFixtures
 
   alias CcInspector.Sessions.Summary
+  alias CcInspector.Sessions.Usage
 
   @path "/Users/me/.claude/projects/-Users-me-proj/sess-1.jsonl"
 
@@ -194,6 +195,85 @@ defmodule CcInspector.Sessions.SummaryTest do
       ]
 
       assert Summary.from_events(events, @path).ai_title == "refined title"
+    end
+  end
+
+  describe "hourly usage buckets" do
+    test "buckets assistant usage into the hour of its timestamp" do
+      events = [
+        event(:assistant,
+          message_id: "m1",
+          timestamp: ~U[2026-08-08 09:10:00Z],
+          usage: usage(input: 10)
+        ),
+        event(:assistant,
+          message_id: "m2",
+          timestamp: ~U[2026-08-08 09:55:00Z],
+          usage: usage(input: 5)
+        ),
+        event(:assistant,
+          message_id: "m3",
+          timestamp: ~U[2026-08-08 12:00:00Z],
+          usage: usage(output: 3)
+        )
+      ]
+
+      buckets = Summary.from_events(events, @path).usage
+      nine = Usage.hour_key(~U[2026-08-08 09:00:00Z])
+      noon = Usage.hour_key(~U[2026-08-08 12:00:00Z])
+
+      assert map_size(buckets) == 2
+      assert buckets[nine].input == 15
+      assert buckets[noon].output == 3
+    end
+
+    test "repeated message ids are counted once, matching the session totals" do
+      events = [
+        event(:assistant,
+          message_id: "m1",
+          timestamp: ~U[2026-08-08 09:00:00Z],
+          usage: usage(input: 10)
+        ),
+        event(:assistant,
+          message_id: "m1",
+          timestamp: ~U[2026-08-08 09:00:00Z],
+          usage: usage(input: 10)
+        )
+      ]
+
+      summary = Summary.from_events(events, @path)
+
+      assert summary.tokens.input == 10
+      assert Usage.total(Usage.sum_all(Map.values(summary.usage))) == 10
+    end
+
+    test "bucket totals reconcile with the session token totals" do
+      events = [
+        event(:assistant,
+          message_id: "m1",
+          timestamp: ~U[2026-08-08 09:00:00Z],
+          usage: usage(input: 10, output: 2, cache_read: 90)
+        ),
+        event(:assistant,
+          message_id: "m2",
+          timestamp: ~U[2026-08-09 09:00:00Z],
+          usage: usage(input: 1, cache_creation: 4)
+        )
+      ]
+
+      summary = Summary.from_events(events, @path)
+      folded = Usage.sum_all(Map.values(summary.usage))
+
+      assert folded.input == summary.tokens.input
+      assert folded.output == summary.tokens.output
+      assert folded.cache_read == summary.tokens.cache_read
+      assert folded.cache_creation == summary.tokens.cache_creation
+    end
+
+    test "events with no usage contribute no buckets" do
+      events = [event(:user, content: "hi"), event(:assistant, message_id: "m1")]
+
+      assert Summary.from_events(events, @path).usage == %{}
     end
   end
 end
