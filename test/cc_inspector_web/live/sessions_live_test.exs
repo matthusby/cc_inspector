@@ -203,6 +203,32 @@ defmodule CcInspectorWeb.SessionsLiveTest do
       assert has_element?(view, "#legend-types")
     end
 
+    # A file event fires a scan roughly twice a second while a session is
+    # running. Shimmering the cards on each one strobed numbers that were
+    # already on screen, so the skeleton is only for having nothing to show.
+    test "a background refresh leaves the values up instead of shimmering",
+         %{conn: conn, dir: dir} do
+      {:ok, view, _html} = live(conn, ~p"/")
+      render_async(view)
+
+      assert has_element?(view, "#stat-input-value")
+      refute has_element?(view, "#stat-input-skeleton")
+
+      write_session!(dir, "-Users-me-proj-beta", "sess-beta", [
+        user_row(content: "beta prompt", cwd: "/Users/me/proj/beta")
+      ])
+
+      send(view.pid, {:session_changed, :claude, "sess-beta", :updated})
+
+      assert has_element?(view, "#stat-input-value")
+      refute has_element?(view, "#stat-input-skeleton")
+
+      render_async(view)
+
+      assert has_element?(view, "#stat-input-value")
+      refute has_element?(view, "#stat-input-skeleton")
+    end
+
     test "cards report the totals the chart is built from", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/")
       html = render_async(view)

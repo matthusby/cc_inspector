@@ -347,8 +347,17 @@ defmodule CcInspectorWeb.Dashboard do
         </span>
       </div>
 
-      <div :if={@loading} class="mt-1 h-7 w-24 animate-pulse rounded bg-base-content/10"></div>
-      <div :if={not @loading} class="mt-1 text-2xl font-semibold text-base-content">
+      <div
+        :if={@loading}
+        id={"#{@id}-skeleton"}
+        class="mt-1 h-7 w-24 animate-pulse rounded bg-base-content/10"
+      >
+      </div>
+      <div
+        :if={not @loading}
+        id={"#{@id}-value"}
+        class="mt-1 text-2xl font-semibold text-base-content"
+      >
         {abbrev_number(@value)}
       </div>
 

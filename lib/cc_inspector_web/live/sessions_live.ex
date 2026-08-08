@@ -22,7 +22,13 @@ defmodule CcInspectorWeb.SessionsLive do
       |> assign(:expanded_projects, MapSet.new())
       |> assign(:summaries, [])
       |> assign(:failed_providers, [])
+      # `loading?` guards against overlapping scans; `loaded?` drives the
+      # skeletons. They are separate because a file event fires a scan roughly
+      # twice a second during an active session, and shimmering the cards on
+      # every one of those strobes numbers that are already on screen. The
+      # skeleton is for having nothing to show, not for being busy.
       |> assign(:loading?, false)
+      |> assign(:loaded?, false)
       |> assign(:reload_queued?, false)
       |> assign(:dashboard_collapsed?, false)
       |> assign(:hidden_types, [])
@@ -104,6 +110,7 @@ defmodule CcInspectorWeb.SessionsLive do
     socket =
       socket
       |> assign(:loading?, false)
+      |> assign(:loaded?, true)
       |> assign(:summaries, summaries)
       |> assign(:failed_providers, failed)
       |> refresh_groups()
@@ -119,6 +126,9 @@ defmodule CcInspectorWeb.SessionsLive do
     {:noreply,
      socket
      |> assign(:loading?, false)
+     # Stop the skeleton even though nothing arrived: shimmering forever reads
+     # as "still working" when the truth is that the scan died.
+     |> assign(:loaded?, true)
      |> assign(:reload_queued?, false)
      |> assign(:failed_providers, Sessions.enabled_providers())}
   end
@@ -232,7 +242,7 @@ defmodule CcInspectorWeb.SessionsLive do
         <.usage_dashboard
           dashboard={@dashboard}
           collapsed={@dashboard_collapsed?}
-          loading={@loading?}
+          loading={not @loaded?}
           failed_providers={@failed_providers}
           hidden_types={@hidden_types}
           hidden_providers={@hidden_providers}
