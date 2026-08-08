@@ -10,6 +10,7 @@ defmodule CcInspector.Application do
     children = [
       CcInspectorWeb.Telemetry,
       {Phoenix.PubSub, name: CcInspector.PubSub},
+      {Task.Supervisor, name: CcInspector.TaskSupervisor},
       CcInspector.Sessions.Cache,
       CcInspector.Sessions.Watcher,
       CcInspectorWeb.Endpoint

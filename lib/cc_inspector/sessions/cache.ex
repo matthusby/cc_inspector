@@ -18,7 +18,7 @@ defmodule CcInspector.Sessions.Cache do
   # which raises at the read site rather than anywhere near the cause. Stamping
   # the version makes stale entries simply miss and reload. Matters in dev,
   # where code reloads but the table survives.
-  @version 2
+  @version 3
 
   ## Client
 
@@ -55,22 +55,23 @@ defmodule CcInspector.Sessions.Cache do
   end
 
   @doc """
-  Memoises a provider-wide value that isn't derived from a single file, so it
-  has no mtime to validate against. Invalidated explicitly by the watcher.
+  Reads a provider-wide value that isn't derived from a single file, so it has
+  no mtime to validate against.
+
+  Returns `:miss` rather than loading on demand: the only such values are
+  expensive to produce, so the watcher recomputes them in the background and
+  swaps them in with `put_provider/2`. Readers take what's there.
   """
-  def fetch_provider(key, loader) do
+  def get_provider(key) do
     cache_key = {:provider, key}
 
     case :ets.lookup(@table, cache_key) do
-      [{^cache_key, @version, value}] ->
-        value
-
-      _ ->
-        value = loader.()
-        :ets.insert(@table, {cache_key, @version, value})
-        value
+      [{^cache_key, @version, value}] -> {:ok, value}
+      _ -> :miss
     end
   end
+
+  def put_provider(key, value), do: :ets.insert(@table, {{:provider, key}, @version, value})
 
   def invalidate_provider(key), do: :ets.delete(@table, {:provider, key})
 

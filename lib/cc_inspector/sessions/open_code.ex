@@ -71,54 +71,86 @@ defmodule CcInspector.Sessions.OpenCode do
   Like `list_summaries/0` but distinguishes "nothing to read" from "couldn't
   read", so the index can say which provider is missing.
 
-  A missing `opencode` executable is not a failure — plenty of installs simply
-  don't have it, and surfacing that as an error would be permanent noise.
+  Reads the last snapshot `refresh/0` produced and never queries inline. Each
+  `opencode db` invocation costs ~470 ms of CLI startup before it runs any SQL,
+  and the two queries behind a snapshot need retries often enough that a cold
+  read added seven seconds to every session scan — which stalled the whole index
+  behind a provider nobody was waiting on.
+
+  A miss with no recorded error means the first refresh hasn't landed yet. That
+  is "not yet", not "broken", so it reports an empty list rather than a failure.
   """
   def list_summaries_result do
-    case Cache.fetch_provider(:opencode_summaries, &load_summaries/0) do
+    case Cache.get_provider(:opencode_summaries) do
       {:ok, summaries} ->
         {:ok, summaries}
 
+      :miss ->
+        case Cache.get_provider(:opencode_error) do
+          {:ok, reason} -> {:error, reason}
+          :miss -> {:ok, []}
+        end
+    end
+  end
+
+  @doc """
+  Re-queries OpenCode and swaps in a new snapshot. Driven by the watcher, off
+  the read path.
+
+  A failed run leaves the previous snapshot in place: stale sessions beat
+  sessions blinking out of the index every time the CLI truncates its output.
+  """
+  def refresh do
+    case load_snapshot() do
+      {:ok, %{summaries: summaries, usage: usage}} ->
+        Cache.put_provider(:opencode_usage, usage)
+        Cache.put_provider(:opencode_summaries, summaries)
+        Cache.invalidate_provider(:opencode_error)
+        :ok
+
       {:error, reason} ->
-        # Never let a failure stick: the next refresh should try again rather
-        # than serve a cached error until the database happens to change.
-        Cache.invalidate_provider(:opencode_summaries)
+        Logger.debug("OpenCode sessions unavailable: #{reason}")
+        Cache.put_provider(:opencode_error, reason)
         {:error, reason}
     end
   end
 
-  defp load_summaries do
+  defp load_snapshot do
     case query(@summary_query) do
       {:ok, rows} when is_list(rows) ->
-        usage = usage_by_session()
+        usage = load_usage_by_session()
 
-        {:ok,
-         Enum.map(rows, fn row ->
-           summary = OpenCodeParser.summary_from_row(row)
-           %{summary | usage: Map.get(usage, summary.session_id, Usage.new())}
-         end)}
+        summaries =
+          Enum.map(rows, fn row ->
+            summary = OpenCodeParser.summary_from_row(row)
+            %{summary | usage: Map.get(usage, summary.session_id, Usage.new())}
+          end)
+
+        {:ok, %{summaries: summaries, usage: usage}}
 
       {:ok, _other} ->
-        {:ok, []}
+        {:ok, %{summaries: [], usage: %{}}}
 
+      # A missing `opencode` executable is not a failure — plenty of installs
+      # simply don't have it, and surfacing that as an error would be permanent
+      # noise.
       {:error, "executable not found"} ->
-        {:ok, []}
+        {:ok, %{summaries: [], usage: %{}}}
 
       {:error, reason} ->
-        Logger.debug("OpenCode sessions unavailable: #{reason}")
         {:error, reason}
     end
   end
 
   @doc """
-  Hourly token buckets per session over the dashboard window, memoised until the
-  watcher sees the database change.
-
-  Cached because the CLI costs ~470 ms of process startup before it runs any
-  SQL, which is more than the rest of the session scan put together.
+  Hourly token buckets per session over the dashboard window, from the snapshot
+  `refresh/0` last loaded.
   """
   def usage_by_session do
-    Cache.fetch_provider(:opencode_usage, &load_usage_by_session/0) || %{}
+    case Cache.get_provider(:opencode_usage) do
+      {:ok, usage} -> usage
+      :miss -> %{}
+    end
   end
 
   defp load_usage_by_session do

@@ -140,4 +140,19 @@ defmodule CcInspector.Sessions.CacheTest do
       assert Cache.summary("inv", dir).first_prompt_preview == "v2"
     end
   end
+
+  describe "provider snapshots" do
+    test "miss until stored, then serve the value until invalidated" do
+      assert Cache.get_provider(:cache_test_probe) == :miss
+
+      Cache.put_provider(:cache_test_probe, %{sessions: 3})
+      assert Cache.get_provider(:cache_test_probe) == {:ok, %{sessions: 3}}
+
+      Cache.put_provider(:cache_test_probe, %{sessions: 4})
+      assert Cache.get_provider(:cache_test_probe) == {:ok, %{sessions: 4}}
+
+      Cache.invalidate_provider(:cache_test_probe)
+      assert Cache.get_provider(:cache_test_probe) == :miss
+    end
+  end
 end
