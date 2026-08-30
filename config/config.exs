@@ -18,12 +18,13 @@ config :cc_inspector, CcInspectorWeb.Endpoint,
   pubsub_server: CcInspector.PubSub,
   live_view: [signing_salt: "mVLAd6Q2"]
 
-# Where Claude Code writes its session JSONL files.
+# Where Claude Code writes its session JSONL files. OpenCode sessions are read
+# from its sqlite database with the `sqlite3` executable.
 config :cc_inspector,
   claude_projects_dir: Path.expand("~/.claude/projects"),
   codex_home: Path.expand(System.get_env("CODEX_HOME", "~/.codex")),
   opencode_data_dir: Path.expand("~/.local/share/opencode"),
-  opencode_cli: "opencode",
+  opencode_sqlite: "sqlite3",
   session_providers: [:claude, :codex, :opencode]
 
 # Configure esbuild (the version is required)

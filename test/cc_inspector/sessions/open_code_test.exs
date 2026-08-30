@@ -33,8 +33,8 @@ defmodule CcInspector.Sessions.OpenCodeTest do
       assert OpenCode.list_summaries_result() == {:error, "command exited with status 1"}
     end
 
-    # The CLI truncates its output often enough that treating a failed run as
-    # "no sessions" made OpenCode blink out of the index at random.
+    # A failed refresh leaves the last good snapshot in place, so OpenCode
+    # sessions never blink out of the index when the database can't be read.
     test "keeps serving the previous snapshot after a refresh fails" do
       summary = %Summary{provider: :opencode, session_id: "ses_1"}
       Cache.put_provider(:opencode_summaries, [summary])

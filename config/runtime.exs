@@ -25,8 +25,8 @@ if opencode_dir = System.get_env("OPENCODE_DATA_DIR") do
   config :cc_inspector, opencode_data_dir: opencode_dir
 end
 
-if opencode_cli = System.get_env("OPENCODE_CLI") do
-  config :cc_inspector, opencode_cli: opencode_cli
+if opencode_sqlite = System.get_env("OPENCODE_SQLITE") do
+  config :cc_inspector, opencode_sqlite: opencode_sqlite
 end
 
 if config_env() == :prod do

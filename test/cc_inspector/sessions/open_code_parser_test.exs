@@ -95,6 +95,46 @@ defmodule CcInspector.Sessions.OpenCodeParserTest do
              Enum.find(turn.blocks, &match?(%Block{kind: :tool_use}, &1))
   end
 
+  test "folds tool parts from both OpenCode schema generations" do
+    # OpenCode 1 names the tool `tool` and the call `callID`...
+    v1_part = %{
+      "type" => "tool",
+      "callID" => "call-1",
+      "tool" => "edit",
+      "state" => %{"status" => "completed", "input" => %{}, "output" => "done"}
+    }
+
+    # ...while OpenCode 2 uses `name` and `id`.
+    v2_part = %{
+      "type" => "tool",
+      "id" => "call-2",
+      "name" => "shell",
+      "state" => %{"status" => "completed", "input" => %{}, "output" => "ok"}
+    }
+
+    export = %{
+      "messages" => [
+        %{
+          "info" => %{"role" => "user", "time" => %{"created" => 1_752_307_200_000}},
+          "parts" => []
+        },
+        %{
+          "info" => %{"role" => "assistant", "time" => %{"created" => 1_752_307_201_000}},
+          "parts" => [v1_part, v2_part]
+        }
+      ]
+    }
+
+    assert [turn] = OpenCodeParser.turns_from_export(export)
+
+    tools =
+      turn.blocks
+      |> Enum.filter(&match?(%Block{kind: :tool_use}, &1))
+      |> Enum.map(& &1.data.name)
+
+    assert tools == ["edit", "shell"]
+  end
+
   describe "usage_from_rows/1" do
     test "groups the SQL rollup into per-session hourly buckets" do
       rows = [

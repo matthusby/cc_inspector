@@ -173,8 +173,10 @@ defmodule CcInspector.Sessions.OpenCodeParser do
       %Block{
         kind: :tool_use,
         data: %{
+          # OpenCode 1 names the tool `tool` and the call `callID`;
+          # OpenCode 2 uses `name` and `id`.
           id: part["callID"] || part["id"],
-          name: part["tool"] || "tool",
+          name: part["tool"] || part["name"] || "tool",
           input: state["input"] || %{},
           result: result
         },

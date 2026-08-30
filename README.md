@@ -33,7 +33,7 @@ By default the app reads:
 
 - Claude Code: `~/.claude/projects`
 - Codex: `~/.codex/sessions` and `~/.codex/archived_sessions`
-- OpenCode: `~/.local/share/opencode/opencode.db`, through the installed `opencode db` command
+- OpenCode: `~/.local/share/opencode/opencode.db`, read directly with the `sqlite3` executable (supports both OpenCode 1 and OpenCode 2 schemas)
 
 Override those locations with environment variables:
 
@@ -41,7 +41,7 @@ Override those locations with environment variables:
 CLAUDE_PROJECTS_DIR=/path/to/claude/projects
 CODEX_HOME=/path/to/.codex
 OPENCODE_DATA_DIR=/path/to/opencode/data
-OPENCODE_CLI=/path/to/opencode
+OPENCODE_SQLITE=/path/to/sqlite3
 ```
 
 Or configure the enabled providers directly:
